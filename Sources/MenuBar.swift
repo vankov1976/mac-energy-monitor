@@ -90,6 +90,7 @@ struct MenuBarView: View {
                     StatusBarController.showMainWindow()
                 }
                 Spacer()
+                SupportLink(iconOnly: true).buttonStyle(.borderless)
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .help("Quit")
             }
@@ -118,8 +119,6 @@ struct MenuBarView: View {
             Text(fmt(v, d) + " " + unit).font(.title3.weight(.semibold)).monospacedDigit()
         }
     }
-
-    private func fmt(_ v: Double, _ d: Int) -> String { v.formatted(.number.precision(.fractionLength(d))) }
 }
 
 /// Puts a bolt + last-hour watts in the menu bar; click shows MenuBarView in a popover.
@@ -201,7 +200,6 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        if !Self.isDiagnosticRun { LoginAgent.migrateLegacy() }
         if !Self.isDiagnosticRun { FrontAppLog.shared.start() }
         launchedAtLogin = launchedAtLogin || Self.isLoginLaunch()
         if launchedAtLogin {

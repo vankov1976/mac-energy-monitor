@@ -19,7 +19,6 @@ struct Breakdown: Equatable, Codable {
         let icon: String
         let color: Color
         let value: Double
-        var indent = false
     }
 
     var parts: [Part] {
@@ -239,10 +238,28 @@ final class InfoPanelState: ObservableObject {
 struct InfoNote: View {
     let sections: [InfoSection]
     var body: some View {
-        Button { InfoPanelState.shared.sections = sections } label: {
-            Label("How these numbers are measured", systemImage: "info.circle").font(.caption)
+        HStack {
+            Button { InfoPanelState.shared.sections = sections } label: {
+                Label("How these numbers are measured", systemImage: "info.circle").font(.caption)
+            }
+            .buttonStyle(.link)
+            Spacer()
+            SupportLink().font(.caption)
         }
-        .buttonStyle(.link)
+    }
+}
+
+/// Optional "buy me a coffee" link (the app is free; this only opens the page in the browser).
+struct SupportLink: View {
+    static let url = URL(string: "https://buymeacoffee.com/vankov1976")!
+    var iconOnly = false
+    var body: some View {
+        Link(destination: Self.url) {
+            if iconOnly { Image(systemName: "cup.and.saucer") }
+            else { Label("Buy me a coffee", systemImage: "cup.and.saucer") }
+        }
+        .foregroundStyle(.secondary)
+        .help("Mac Energy Monitor is free. If you'd like to say thanks, you can buy the developer a coffee (opens buymeacoffee.com).")
     }
 }
 

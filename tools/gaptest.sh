@@ -3,7 +3,8 @@
 # never in the real history folder. The test folder is deleted afterwards.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-BIN="build/Mac Energy Monitor.app/Contents/MacOS/MacEnergyMonitor"
+./build.sh --tests >/dev/null || exit 1
+BIN="build/tests/Mac Energy Monitor.app/Contents/MacOS/MacEnergyMonitor"
 T=$(mktemp -d "${TMPDIR:-/tmp}/mem-gaptest.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 rc=0

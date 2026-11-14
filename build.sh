@@ -3,7 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP="build/Mac Energy Monitor.app"
+# `./build.sh --tests`: a test build with the command-line checks (Sources/Diagnostics) in build/tests.
+APP="build/Mac Energy Monitor.app"; EXTRA=()
+if [ "${1:-}" = "--tests" ]; then
+  APP="build/tests/Mac Energy Monitor.app"; EXTRA=(-D DIAGNOSTICS Sources/Diagnostics/*.swift)
+fi
 rm -rf "$APP" build/icon.iconset
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -11,7 +15,7 @@ echo "Compiling…"
 swiftc -O -swift-version 5 -parse-as-library \
   -target arm64-apple-macos14 \
   -o "$APP/Contents/MacOS/MacEnergyMonitor" \
-  Sources/*.swift
+  Sources/*.swift ${EXTRA[@]+"${EXTRA[@]}"}
 
 echo "Making icon…"
 swift tools/make_icon.swift build/icon.iconset

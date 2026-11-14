@@ -330,6 +330,4 @@ struct LiveTableView: View {
         .onAppear { live.start() }
         .onDisappear { live.stop() }
     }
-
-    private func fmt(_ v: Double, _ d: Int) -> String { v.formatted(.number.precision(.fractionLength(d))) }
 }

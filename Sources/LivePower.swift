@@ -46,10 +46,10 @@ struct LivePowerView: View {
         HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Label("Whole Mac now", systemImage: "bolt.fill").font(.caption).foregroundStyle(.secondary)
-                Text(live.current.map { fmt($0) + " W" } ?? "—")
+                Text(live.current.map { fmt($0, 1) + " W" } ?? "—")
                     .font(.system(size: 30, weight: .semibold)).monospacedDigit()
                 if !ws.isEmpty {
-                    Text("5 min: min \(fmt(ws.min()!)) · avg \(fmt(ws.reduce(0, +) / Double(ws.count))) · max \(fmt(ws.max()!)) W")
+                    Text("5 min: min \(fmt(ws.min()!, 1)) · avg \(fmt(ws.reduce(0, +) / Double(ws.count), 1)) · max \(fmt(ws.max()!, 1)) W")
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
@@ -73,8 +73,6 @@ struct LivePowerView: View {
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
         .help("Live power draw of the whole Mac (screen, chip, memory, SSD, Wi-Fi), read at the chosen update interval (1–10 s) from the system management controller. Shows the last 5 minutes.")
     }
-
-    private func fmt(_ v: Double) -> String { v.formatted(.number.precision(.fractionLength(1))) }
 
     private static func thinned(_ s: [LivePower.Sample]) -> [LivePower.Sample] {
         let step = max(1, s.count / 150)

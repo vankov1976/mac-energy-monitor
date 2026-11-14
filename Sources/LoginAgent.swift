@@ -9,42 +9,12 @@ import SwiftUI
 enum LoginAgent {
     static let label = "local.mac-energy-monitor.startatlogin"
     static var service: SMAppService { SMAppService.agent(plistName: label + ".plist") }
-    /// Name of the earlier loose agent (macOS may still list it until it cleans up stale entries).
-    static let legacyLabel = "local.mac-energy-monitor.login"
-
-    /// The earlier version used a loose file in ~/Library/LaunchAgents (shown by macOS with a terminal icon).
-    static var legacyPlist: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(legacyLabel).plist")
-    }
 
     static var isEnabled: Bool { service.status == .enabled }
 
-    static func enable() throws {
-        removeLegacy()
-        try service.register()
-    }
+    static func enable() throws { try service.register() }
 
-    static func disable() {
-        try? service.unregister()
-        removeLegacy()
-    }
-
-    /// Replaces the old loose agent (once, at launch) with the registered one.
-    static func migrateLegacy() {
-        guard FileManager.default.fileExists(atPath: legacyPlist.path) else { return }
-        removeLegacy()
-        try? service.register()
-    }
-
-    private static func removeLegacy() {
-        guard FileManager.default.fileExists(atPath: legacyPlist.path) else { return }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        p.arguments = ["bootout", "gui/\(getuid())/\(legacyLabel)"]
-        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-        try? p.run(); p.waitUntilExit()
-        try? FileManager.default.removeItem(at: legacyPlist)
-    }
+    static func disable() { try? service.unregister() }
 }
 
 /// One shared on/off state for the "Start at login" switches in the window and the menu bar panel.
