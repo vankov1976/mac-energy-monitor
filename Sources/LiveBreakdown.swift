@@ -364,6 +364,9 @@ struct LiveTableView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(sortKey == key ? .primary : .secondary)
+        .accessibilityLabel("Sort by " + title)
+        .accessibilityValue(sortKey == key ? (ascending ? "ascending" : "descending") : "")
+        .accessibilityAddTraits(sortKey == key ? .isSelected : [])
     }
 
     private func row(_ r: LiveRow) -> some View {

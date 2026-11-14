@@ -79,6 +79,7 @@ struct MenuBarView: View {
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     .help("Choose the period for the average power")
+                    .accessibilityLabel("Average power period, " + Self.periodName(model.period))
                 } value: {
                     HStack {
                         valueText(model.avgW)
@@ -90,6 +91,7 @@ struct MenuBarView: View {
                         .buttonStyle(.bordered).controlSize(.small)
                         .disabled(model.loading)
                         .help("Reload the average power from macOS's power log")
+                        .accessibilityLabel("Reload average power")
                     }
                 }
             }
@@ -126,6 +128,7 @@ struct MenuBarView: View {
                 SupportLink(iconOnly: true).buttonStyle(.borderless)
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .help("Quit")
+                    .accessibilityLabel("Quit Mac Energy Monitor")
             }
         }
         .padding(14)

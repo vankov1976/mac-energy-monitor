@@ -259,6 +259,7 @@ struct SupportLink: View {
             else { Label("Buy me a coffee", systemImage: "cup.and.saucer") }
         }
         .foregroundStyle(.secondary)
+        .accessibilityLabel("Buy me a coffee")
         .help("Mac Energy Monitor is free. If you'd like to say thanks, you can buy the developer a coffee (opens buymeacoffee.com).")
     }
 }
@@ -278,7 +279,7 @@ struct InfoPanel: View {
                         Text("How these numbers are measured").font(.title3.weight(.semibold))
                         Spacer()
                         Button { state.sections = nil } label: { Image(systemName: "xmark.circle.fill").font(.title3) }
-                            .buttonStyle(.plain).foregroundStyle(.secondary).help("Close (Esc)")
+                            .buttonStyle(.plain).foregroundStyle(.secondary).help("Close (Esc)").accessibilityLabel("Close")
                             .keyboardShortcut(.cancelAction)
                     }
                     .padding(.bottom, 10)

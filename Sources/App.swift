@@ -148,12 +148,14 @@ if preset != .live {
                     }
                     .foregroundStyle(.secondary)
                     .padding(.leading, 6)
+                    .accessibilityHidden(true)       // the picker below carries the name for VoiceOver
                     Picker("Appearance", selection: $appearance) {
                         Text("Follow system").tag(AppAppearance.system)
                         Text("Light").tag(AppAppearance.light)
                         Text("Dark").tag(AppAppearance.dark)
                     }
                     .pickerStyle(.menu).labelsHidden().fixedSize()
+                    .accessibilityLabel("Appearance")
                 }
                 .help("Window appearance: follow the system, or always light or dark")
             }
