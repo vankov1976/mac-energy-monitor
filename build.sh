@@ -1,0 +1,60 @@
+#!/bin/bash
+# Builds "Mac Energy Monitor.app" into ./build (no Xcode project needed).
+set -euo pipefail
+cd "$(dirname "$0")"
+
+APP="build/Mac Energy Monitor.app"
+rm -rf "$APP" build/icon.iconset
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+echo "Compiling…"
+swiftc -O -swift-version 5 -parse-as-library \
+  -target arm64-apple-macos14 \
+  -o "$APP/Contents/MacOS/MacEnergyMonitor" \
+  Sources/*.swift
+
+echo "Making icon…"
+swift tools/make_icon.swift build/icon.iconset
+iconutil -c icns build/icon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+rm -rf build/icon.iconset
+
+cat > "$APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Mac Energy Monitor</string>
+  <key>CFBundleDisplayName</key><string>Mac Energy Monitor</string>
+  <key>CFBundleIdentifier</key><string>local.mac-energy-monitor</string>
+  <key>CFBundleExecutable</key><string>MacEnergyMonitor</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+
+# Login agent, registered by the app itself via SMAppService ("Start at login"): starts the app with --background.
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cat > "$APP/Contents/Library/LaunchAgents/local.mac-energy-monitor.startatlogin.plist" <<'AGENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.mac-energy-monitor.startatlogin</string>
+  <key>BundleProgram</key><string>Contents/MacOS/MacEnergyMonitor</string>
+  <key>ProgramArguments</key><array><string>MacEnergyMonitor</string><string>--background</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>AssociatedBundleIdentifiers</key><array><string>local.mac-energy-monitor</string></array>
+</dict>
+</plist>
+AGENT
+
+codesign --force --sign - "$APP" >/dev/null
+echo "Built: $APP"
