@@ -60,7 +60,7 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Power").font(.headline).frame(maxWidth: .infinity)
+            Text("Power").font(.title2.weight(.semibold)).frame(maxWidth: .infinity)
             HStack(spacing: 10) {
                 statBox { Text("Whole Mac now").foregroundStyle(.secondary) } value: {
                     valueText(model.systemW)
@@ -151,7 +151,7 @@ struct MenuBarView: View {
 
     static func periodName(_ p: Preset) -> String {
         switch p {
-        case .hour: return "last hour"
+        case .hour: return "last 1 hour"
         case .all: return "all history"
         default: return "last " + p.rawValue
         }
