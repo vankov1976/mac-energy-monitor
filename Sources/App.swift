@@ -20,6 +20,25 @@ struct EnergyMonitorApp: App {
                 .frame(minWidth: 940, minHeight: 470)   // + ~52 pt title bar: fits 960 x 600-point screens (smallest scaled resolution)
         }
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Mac Energy Monitor") { Self.showAbout() }
+            }
+        }
+    }
+
+    static let homepage = URL(string: "https://github.com/vankov1976/mac-energy-monitor")!
+
+    /// macOS's standard About panel, with "Version 1.0" (no build number) and the project link below it.
+    static func showAbout() {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let link = NSAttributedString(string: "github.com/vankov1976/mac-energy-monitor", attributes: [
+            .link: homepage, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .paragraphStyle: style])
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationVersion: version, .version: "", .credits: link])
     }
 }
 
@@ -73,9 +92,9 @@ final class Model: ObservableObject {
 struct ContentView: View {
     @StateObject private var model = Model()
     // Remembered between launches: the chosen view, filters and custom dates.
-    @AppStorage("preset") private var preset: Preset = .week
+    @AppStorage("preset") private var preset: Preset = .live
     @AppStorage("kind") private var kind = "All"
-    @AppStorage("minEnergy") private var minEnergy = 0.1
+    @AppStorage("minEnergy") private var minEnergy = 0.0
     @AppStorage("screenOnly") private var screenOnly = false
     @AppStorage("appearance") private var appearance: AppAppearance = .system
     @State private var from = ContentView.savedDate("customFrom") ?? Date().addingTimeInterval(-7 * 86400)

@@ -2,11 +2,14 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Last-hour summary for the menu bar; refreshes every 5 minutes.
+/// Average power over a chosen period for the menu bar panel; refreshes every 5 minutes.
 @MainActor
 final class MenuModel: ObservableObject {
-    @Published var report: Report?
-    @Published var watts: Double?
+    static let periods: [Preset] = [.hour, .day, .threeDays, .week, .all]
+    @Published var avgW: Double?
+    @Published var period: Preset {
+        didSet { UserDefaults.standard.set(period.rawValue, forKey: "menuPeriod"); refresh() }
+    }
     @Published var error: String?
     @Published var systemW: Double?
     @Published var loading = false
@@ -14,6 +17,8 @@ final class MenuModel: ObservableObject {
     private var liveSub: AnyCancellable?
 
     init() {
+        let saved = Preset(rawValue: UserDefaults.standard.string(forKey: "menuPeriod") ?? "")
+        period = saved.flatMap { Self.periods.contains($0) ? $0 : nil } ?? .hour
         liveSub = LivePower.shared.$current.sink { [weak self] w in self?.systemW = w }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
@@ -23,16 +28,23 @@ final class MenuModel: ObservableObject {
 
     func refresh() {
         let now = Date()
+        let period = period
         loading = true
         logQueue.async {
-            let result = Result { try sharedLog.fullReport(from: now.addingTimeInterval(-3600), to: now) }
+            let result = Result { () throws -> Report in
+                // "All": from the oldest data (macOS's logs or the app's saved days), as in the window.
+                let from = period.hours.map { now.addingTimeInterval(-$0 * 3600) }
+                    ?? (try? sharedLog.fullRange())?.lowerBound ?? now.addingTimeInterval(-14 * 86400)
+                return try sharedLog.fullReport(from: from, to: now)
+            }
             DispatchQueue.main.async {
+                guard period == self.period else { return }   // the choice changed meanwhile; a newer load follows
                 self.loading = false
                 switch result {
                 case .success(let r):
-                    self.report = r
                     self.error = nil
-                    self.watts = r.totals.hours > 0 ? r.totals.energyWh / r.totals.hours : nil
+                    // Same as the window's "Avg. power" card: whole-Mac energy / hours with data.
+                    self.avgW = r.coveredHours > 0 && r.hardware.whole > 0 ? r.hardware.whole / r.coveredHours : nil
                 case .failure(let e):
                     self.error = e.localizedDescription
                 }
@@ -51,14 +63,8 @@ struct MenuBarView: View {
             Text("Power").font(.headline)
             HStack(alignment: .center, spacing: 18) {
                 if let w = model.systemW { stat("Whole Mac now", w, "W", 1) }
-                if let r = model.report, r.hardware.whole > 0 { stat("Last hour", r.hardware.whole, "Wh", 1) }
                 Spacer()
-                Button { model.refresh() } label: {
-                    if model.loading { ProgressView().controlSize(.small) } else { Label("Reload", systemImage: "arrow.clockwise") }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .disabled(model.loading)
-                .help("Reload the last hour from the power log")
+                averageBox
             }
             Divider()
             HStack {
@@ -97,6 +103,43 @@ struct MenuBarView: View {
         }
         .padding(14)
         .frame(width: 360)
+    }
+
+    /// Average power + its period + the reload button in one framed box, so it's clear what is reloaded.
+    private var averageBox: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Menu {
+                    ForEach(MenuModel.periods) { p in
+                        Toggle(Self.periodName(p), isOn: Binding(get: { model.period == p }, set: { if $0 { model.period = p } }))
+                    }
+                } label: {
+                    Text("Avg. power · " + Self.periodName(model.period)).font(.caption)
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Choose the period for the average power")
+                Text(model.avgW.map { fmt($0, 1) + " W" } ?? "–– W")
+                    .font(.title3.weight(.semibold)).monospacedDigit()
+            }
+            Button { model.refresh() } label: {
+                if model.loading { ProgressView().controlSize(.small).frame(width: 16, height: 16) }
+                else { Image(systemName: "arrow.clockwise").frame(width: 16, height: 16) }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            .disabled(model.loading)
+            .help("Reload the average power from macOS's power log")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15)))
+    }
+
+    static func periodName(_ p: Preset) -> String {
+        switch p {
+        case .hour: return "last hour"
+        case .all: return "all history"
+        default: return "last " + p.rawValue
+        }
     }
 
     private func liveRow(_ icon: AnyView, _ name: String, _ w: Double) -> some View {
