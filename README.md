@@ -10,6 +10,19 @@ A small native menu bar app for Apple silicon Macs that shows **how much power y
 
 No admin rights, no network access, no tracking. Everything stays on your Mac.
 
+![Live view: whole-Mac power, breakdown by hardware part, and the apps using power right now](docs/live.png)
+
+<table>
+<tr>
+<td width="68%"><img src="docs/history.png" alt="History for 7 days: energy, average power, screen time and a table of apps"></td>
+<td width="32%"><img src="docs/menubar.png" alt="Menu bar panel: power now, average power, live breakdown and top apps"></td>
+</tr>
+<tr>
+<td align="center"><sub>History (here 7 days)</sub></td>
+<td align="center"><sub>Menu bar panel</sub></td>
+</tr>
+</table>
+
 ## Requirements
 
 - A Mac with **Apple silicon** (M1 or later)
