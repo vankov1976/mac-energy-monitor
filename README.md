@@ -65,6 +65,10 @@ See [UNINSTALL.md](UNINSTALL.md) for every file the app creates and how to remov
 
 The live chip readings on newer macOS versions use the method and counter IDs from [macmon](https://github.com/vladkens/macmon) by vladkens (MIT License). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
+## Support
+
+Mac Energy Monitor is free and stays free for everyone. If it's useful to you and you'd like to say thanks, you can [buy me a coffee ☕](https://buymeacoffee.com/vankov1976). Completely optional, and much appreciated.
+
 ## Feedback
 
 Found a bug, or tried it on another chip or macOS version? Please open an [issue](../../issues) and include your Mac model, chip and macOS version.
