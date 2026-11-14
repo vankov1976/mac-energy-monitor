@@ -21,9 +21,11 @@ It was developed and tested on an M1 Pro with macOS 27. Other chips and macOS ve
 
 1. Download `Mac-Energy-Monitor.zip` from the [Releases](../../releases) page and unzip it.
 2. Move **Mac Energy Monitor.app** to your **Applications** folder.
-3. Open it. Because the app isn't notarized by Apple, macOS will say it can't check the app for malware the first time. To allow it once:
-   - Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open Anyway** (available for about an hour after you tried to open the app).
-   - Confirm with your login password.
+3. Open it. Because the app isn't notarized by Apple, macOS shows a warning the first time: **"Mac Energy Monitor" Not Opened. Apple could not verify "Mac Energy Monitor" is free of malware…** Click **Done** (not "Move to Trash"). Then allow it once:
+   - Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open Anyway** next to "Mac Energy Monitor" (available for about an hour after you tried to open the app).
+   - Confirm with your login password and click **Open**.
+
+   After that, it opens normally.
 
    Apple describes the steps in [Open a Mac app from an unknown developer](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
 
