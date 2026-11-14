@@ -359,4 +359,6 @@ enum TestSwitch {
     static let legacy = flags.contains("legacy")
     static let noCLPC = legacy || flags.contains("noclpc")
     static let noSMC = flags.contains("nosmc")
+    /// "nopause": keep live sampling while the window is hidden (for memory tests with the screen locked).
+    static let noPause = flags.contains("nopause")
 }

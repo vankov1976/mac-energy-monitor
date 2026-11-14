@@ -268,19 +268,37 @@ final class ProcessSampler: @unchecked Sendable {   // only used on LiveBreakdow
 }
 
 /// Live view for the main window: pinned breakdown above, your apps below (sortable and filterable).
+/// The app list is a plain SwiftUI list, not `Table`: Apple's table leaks memory on every update
+/// (about 30 MB an hour at one update per second, found Nov 2026 with malloc stack logging).
 struct LiveTableView: View {
     @ObservedObject var live = LiveBreakdown.shared
     @ObservedObject var settings = LiveSettings.shared
     let search: String
     @Binding var kind: String
-    @State private var sortOrder = [KeyPathComparator(\LiveRow.watts, order: .reverse)]
+    @State private var sortKey = SortKey.watts
+    @State private var ascending = false
+    /// Sampling runs only while the window can be seen (not covered, minimized or behind the lock screen).
+    @State private var sampling = false
+
+    enum SortKey { case name, kind, share, watts }
+
+    // Column widths (the name column takes the rest).
+    private static let typeW: CGFloat = 90, shareW: CGFloat = 150, powerW: CGFloat = 120
 
     private var rows: [LiveRow] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        return live.rows.filter { r in
+        let list = live.rows.filter { r in
             (q.isEmpty || r.name.lowercased().contains(q) || r.id.lowercased().contains(q)) &&
             (kind == "All" || r.kind == kind) && r.watts > 0
-        }.sorted(using: sortOrder)
+        }
+        let sorted: [LiveRow]
+        switch sortKey {
+        case .name: sorted = list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .kind: sorted = list.sorted { $0.kind < $1.kind }
+        case .share: sorted = list.sorted { $0.share < $1.share }
+        case .watts: sorted = list.sorted { $0.watts < $1.watts }
+        }
+        return ascending ? sorted : sorted.reversed()
     }
 
     var body: some View {
@@ -298,36 +316,88 @@ struct LiveTableView: View {
             if !live.ready {
                 ProgressView("Measuring…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(rows, sortOrder: $sortOrder) {
-                    TableColumn("App / service", value: \.name) { r in
-                        HStack(spacing: 8) {
-                            AppIcon(path: r.appPath)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(r.name)
-                                Text(r.id).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
+                                row(r).background(i % 2 == 1 ? Color.primary.opacity(0.04) : .clear)
                             }
                         }
-                        .frame(height: 32)   // same height in every row, so the second line always shows
-                        .help(r.name + "\n" + r.id)
-                    }.width(min: 260, ideal: 360)
-                    TableColumn("Type", value: \.kind) { Text($0.kind).foregroundStyle(.secondary).lineLimit(1) }
-                        .width(min: 84, ideal: 90)
-                    TableColumn("Share of whole Mac", value: \.share) { r in
-                        HStack(spacing: 6) {
-                            Capsule().fill(.tint).frame(width: max(2, min(60, r.share * 3)), height: 5)
-                            Text(fmt(r.share, 1) + "%").monospacedDigit()
-                        }
-                    }.width(min: 145, ideal: 150)
-                    TableColumn("Power now (W)", value: \.watts) { r in
-                        Text(r.watts < 0.0005 ? "< 0.001" : fmt(r.watts, r.watts < 1 ? 3 : 2)).monospacedDigit()
-                            .lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing)
-                    }.width(min: 112, ideal: 120)
+                    }
                 }
+                .background(.background)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
                 .frame(minHeight: 110)
             }
             InfoNote(sections: Explanations.live)
         }
-        .onAppear { live.start() }
-        .onDisappear { live.stop() }
+        .onAppear { updateSampling() }
+        .onDisappear { setSampling(false) }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { _ in
+            updateSampling()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 0) {
+            headerCell("App / service", .name, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
+            headerCell("Type", .kind, alignment: .leading).frame(width: Self.typeW, alignment: .leading)
+            headerCell("Share of whole Mac", .share, alignment: .leading).frame(width: Self.shareW, alignment: .leading)
+            headerCell("Power now (W)", .watts, alignment: .trailing).frame(width: Self.powerW, alignment: .trailing)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 5)
+    }
+
+    /// Click a column title to sort by it; click again to reverse.
+    private func headerCell(_ title: String, _ key: SortKey, alignment: HorizontalAlignment) -> some View {
+        Button {
+            if sortKey == key { ascending.toggle() } else { sortKey = key; ascending = key == .name || key == .kind }
+        } label: {
+            HStack(spacing: 3) {
+                Text(title).fontWeight(sortKey == key ? .semibold : .regular)
+                if sortKey == key { Image(systemName: ascending ? "chevron.up" : "chevron.down").font(.caption2) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(sortKey == key ? .primary : .secondary)
+    }
+
+    private func row(_ r: LiveRow) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                AppIcon(path: r.appPath)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(r.name).lineLimit(1)
+                    Text(r.id).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(r.name + "\n" + r.id)
+            Text(r.kind).foregroundStyle(.secondary).lineLimit(1).frame(width: Self.typeW, alignment: .leading)
+            HStack(spacing: 6) {
+                Capsule().fill(.tint).frame(width: max(2, min(60, r.share * 3)), height: 5)
+                Text(fmt(r.share, 1) + "%").monospacedDigit()
+            }
+            .frame(width: Self.shareW, alignment: .leading)
+            Text(r.watts < 0.0005 ? "< 0.001" : fmt(r.watts, r.watts < 1 ? 3 : 2)).monospacedDigit()
+                .lineLimit(1).frame(width: Self.powerW, alignment: .trailing)
+        }
+        .frame(height: 32)
+        .padding(.horizontal, 10).padding(.vertical, 4)
+    }
+
+    private func updateSampling() {
+        let w = NSApp.windows.first(where: StatusBarController.isMainWindow)
+        setSampling(TestSwitch.noPause || (w?.occlusionState.contains(.visible) ?? true))
+    }
+
+    private func setSampling(_ on: Bool) {
+        guard on != sampling else { return }
+        sampling = on
+        if on { live.start() } else { live.stop() }
     }
 }
