@@ -2,13 +2,13 @@ import Foundation
 import ServiceManagement
 import SwiftUI
 
-/// "Start at login": a login agent shipped inside the app bundle (Contents/Library/LaunchAgents, see build.sh)
-/// and registered with SMAppService, so macOS ties it to the app (its name and icon in System Settings →
-/// General → Login Items → Allow in the Background). It starts the app with `--background` — the only thing
-/// that makes the app start hidden; every other start (Finder, Dock, Spotlight) shows the window.
+/// "Start at login": the app itself as a login item (SMAppService.mainApp, listed under System Settings →
+/// General → Login Items → Open at Login). macOS opens it with a "launched as login item" Apple event, which
+/// makes the app start hidden (see StatusBarController.isLoginLaunch); every other start shows the window.
+/// (A login agent inside the bundle was used before: macOS ties such an agent to the exact build of a
+/// self-signed app and refuses to start it after any update, so it's no longer used.)
 enum LoginAgent {
-    static let label = "local.mac-energy-monitor.startatlogin"
-    static var service: SMAppService { SMAppService.agent(plistName: label + ".plist") }
+    static var service: SMAppService { .mainApp }
 
     static var isEnabled: Bool { service.status == .enabled }
 
@@ -44,6 +44,6 @@ struct StartAtLoginToggle: View {
         }
         .fixedSize()
             .onAppear { setting.refresh() }
-            .help("Opens Mac Energy Monitor in the menu bar (no window) when you log in. macOS lists it under System Settings → General → Login Items → Allow in the Background. Don't also add it to \"Open at Login\" there.")
+            .help("Opens Mac Energy Monitor in the menu bar (no window) when you log in. macOS lists it under System Settings → General → Login Items → Open at Login.")
     }
 }

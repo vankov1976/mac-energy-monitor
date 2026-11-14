@@ -226,8 +226,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
 
     private var launchedAtLogin = false
 
-    /// Hidden start only when the login agent (see LoginAgent) opened the app with `--background`.
-    private static func isLoginLaunch() -> Bool { CommandLine.arguments.contains("--background") }
+    /// Hidden start only when macOS opened the app as a login item (see LoginAgent), or with `--background`.
+    private static func isLoginLaunch() -> Bool {
+        if CommandLine.arguments.contains("--background") { return true }
+        guard let e = NSAppleEventManager.shared().currentAppleEvent, e.eventID == kAEOpenApplication else { return false }
+        return e.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
 
     func applicationWillFinishLaunching(_ note: Notification) {
         // Never two copies of the app (e.g. the login agent while it already runs): show the running one instead.
@@ -251,7 +255,9 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        if !Self.isDiagnosticRun { FrontAppLog.shared.start() }
+        if !Self.isDiagnosticRun {
+            FrontAppLog.shared.start()
+        }
         launchedAtLogin = launchedAtLogin || Self.isLoginLaunch()
         if launchedAtLogin {
             // Close the window SwiftUI opens at launch; the app stays in the menu bar.

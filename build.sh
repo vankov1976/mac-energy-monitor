@@ -42,23 +42,6 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Login agent, registered by the app itself via SMAppService ("Start at login"): starts the app with --background.
-mkdir -p "$APP/Contents/Library/LaunchAgents"
-cat > "$APP/Contents/Library/LaunchAgents/local.mac-energy-monitor.startatlogin.plist" <<'AGENT'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>local.mac-energy-monitor.startatlogin</string>
-  <key>BundleProgram</key><string>Contents/MacOS/MacEnergyMonitor</string>
-  <key>ProgramArguments</key><array><string>MacEnergyMonitor</string><string>--background</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>LimitLoadToSessionType</key><string>Aqua</string>
-  <key>ProcessType</key><string>Interactive</string>
-  <key>AssociatedBundleIdentifiers</key><array><string>local.mac-energy-monitor</string></array>
-</dict>
-</plist>
-AGENT
 
 codesign --force --sign - "$APP" >/dev/null
 echo "Built: $APP"

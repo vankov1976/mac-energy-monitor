@@ -9,7 +9,7 @@ Everything the app stores on the Mac (checked 14 Nov 2026):
 | Saved daily history + app-switch record | `~/Library/Application Support/MacEnergyMonitor` | < 1 MB | **your long-term history** — keep a copy if you may reinstall |
 | Settings (view, filters, appearance …) | `~/Library/Preferences/local.mac-energy-monitor.plist` | 4 KB | |
 | macOS's own cache for the app | `/var/folders/…/C/local.mac-energy-monitor` | small | created by macOS; removed by macOS over time |
-| "Start at login" registration | System Settings → General → Login Items → Allow in the Background | — | switch **off** "Start at login" in the app *before* deleting it |
+| "Start at login" registration | System Settings → General → Login Items → Open at Login | — | switch **off** "Start at login" in the app *before* deleting it |
 
 ## Steps
 
