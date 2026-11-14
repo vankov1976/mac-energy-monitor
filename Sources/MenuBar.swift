@@ -60,11 +60,38 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Power").font(.headline)
-            HStack(alignment: .center, spacing: 18) {
-                if let w = model.systemW { stat("Whole Mac now", w, "W", 1) }
-                Spacer()
-                averageBox
+            Text("Power").font(.headline).frame(maxWidth: .infinity)
+            HStack(spacing: 10) {
+                statBox { Text("Whole Mac now").foregroundStyle(.secondary) } value: {
+                    valueText(model.systemW)
+                }
+                statBox {
+                    Menu {
+                        ForEach(MenuModel.periods) { p in
+                            Toggle(Self.periodName(p), isOn: Binding(get: { model.period == p }, set: { if $0 { model.period = p } }))
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Avg. power · " + Self.periodName(model.period))
+                            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                    .help("Choose the period for the average power")
+                } value: {
+                    HStack {
+                        valueText(model.avgW)
+                        Spacer(minLength: 4)
+                        Button { model.refresh() } label: {
+                            if model.loading { ProgressView().controlSize(.mini).frame(width: 14, height: 14) }
+                            else { Image(systemName: "arrow.clockwise").frame(width: 14, height: 14) }
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(model.loading)
+                        .help("Reload the average power from macOS's power log")
+                    }
+                }
             }
             Divider()
             HStack {
@@ -105,33 +132,21 @@ struct MenuBarView: View {
         .frame(width: 360)
     }
 
-    /// Average power + its period + the reload button in one framed box, so it's clear what is reloaded.
-    private var averageBox: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Menu {
-                    ForEach(MenuModel.periods) { p in
-                        Toggle(Self.periodName(p), isOn: Binding(get: { model.period == p }, set: { if $0 { model.period = p } }))
-                    }
-                } label: {
-                    Text("Avg. power · " + Self.periodName(model.period)).font(.caption)
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .help("Choose the period for the average power")
-                Text(model.avgW.map { fmt($0, 1) + " W" } ?? "–– W")
-                    .font(.title3.weight(.semibold)).monospacedDigit()
-            }
-            Button { model.refresh() } label: {
-                if model.loading { ProgressView().controlSize(.small).frame(width: 16, height: 16) }
-                else { Image(systemName: "arrow.clockwise").frame(width: 16, height: 16) }
-            }
-            .buttonStyle(.bordered).controlSize(.small)
-            .disabled(model.loading)
-            .help("Reload the average power from macOS's power log")
+    /// One framed box: a caption line and a value line, both starting at the same left edge.
+    /// Both boxes have the same width and height.
+    private func statBox<C: View, V: View>(@ViewBuilder caption: () -> C, @ViewBuilder value: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            caption().font(.caption).lineLimit(1)
+            value().frame(height: 24)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15)))
+    }
+
+    private func valueText(_ w: Double?) -> some View {
+        Text(w.map { fmt($0, 1) + " W" } ?? "–– W").font(.title3.weight(.semibold)).monospacedDigit()
     }
 
     static func periodName(_ p: Preset) -> String {
@@ -154,13 +169,6 @@ struct MenuBarView: View {
     private func hwIcon(_ name: String, _ color: Color) -> AnyView {
         AnyView(Image(systemName: name).resizable().scaledToFit().foregroundStyle(color).padding(3)
             .frame(width: 22, height: 22))
-    }
-
-    private func stat(_ title: String, _ v: Double, _ unit: String, _ d: Int) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(fmt(v, d) + " " + unit).font(.title3.weight(.semibold)).monospacedDigit()
-        }
     }
 }
 
