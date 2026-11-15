@@ -39,9 +39,16 @@ enum AboutWindow {
             w.setFrameOrigin(NSPoint(x: f.midX - s.width / 2, y: f.midY - s.height / 2))
             main.orderFront(nil)
         } else {
+            // No app window open (e.g. opened from the menu bar panel): exactly in the middle of the screen
+            // the mouse is on. (NSWindow.center() places windows higher, and before SwiftUI has sized it.)
             w.parent?.removeChildWindow(w)
             w.level = .floating
-            w.center()
+            if let v = w.contentView { w.setContentSize(v.fittingSize) }
+            let mouse = NSEvent.mouseLocation
+            if let vf = (NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main)?.visibleFrame {
+                let s = w.frame.size
+                w.setFrameOrigin(NSPoint(x: vf.midX - s.width / 2, y: vf.midY - s.height / 2))
+            }
         }
         w.makeKeyAndOrderFront(nil)
     }
@@ -154,11 +161,9 @@ struct DownloadControls: View {
         }
     }
 
-    /// "Downloads › Mac Energy Monitor 1.1" (folder names as Finder shows them).
+    /// The folder the new app was saved in, as Finder shows its name ("Downloads").
     static func place(of app: URL) -> String {
-        let folder = app.deletingLastPathComponent(), parent = folder.deletingLastPathComponent()
-        let fm = FileManager.default
-        return fm.displayName(atPath: parent.path) + " › " + fm.displayName(atPath: folder.path)
+        FileManager.default.displayName(atPath: app.deletingLastPathComponent().path)
     }
 
     private func hint(_ s: String) -> some View {

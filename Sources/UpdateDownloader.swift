@@ -63,42 +63,45 @@ final class UpdateDownloader: NSObject, ObservableObject {
 
     struct UpdateError: Error { let message: String }
 
-    /// Downloads, then unpacks into "<parent>/Mac Energy Monitor <version>" (its own folder, so nothing else is touched).
+    /// Downloads, unpacks and checks the app in a private temporary folder, then moves only
+    /// "Mac Energy Monitor.app" into the chosen folder (no extra version folder).
     private func fetchAndUnpack(_ url: URL, version: String, into parent: URL) async throws -> URL {
         let tmpZip = try await download(url)
         defer { try? FileManager.default.removeItem(at: tmpZip) }
 
         let fm = FileManager.default
-        guard let folder = Self.makeFolder("Mac Energy Monitor \(version)", in: parent) else {
-            throw UpdateError(message: "The new version could not be saved in \(fm.displayName(atPath: parent.path)). Click Try Again and choose another folder.")
-        }
+        let work = fm.temporaryDirectory.appendingPathComponent("MacEnergyMonitor-update-" + UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: work) }
 
-        try await Self.run("/usr/bin/ditto", ["-x", "-k", tmpZip.path, folder.path])
-        guard let app = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
+        try await Self.run("/usr/bin/ditto", ["-x", "-k", tmpZip.path, work.path])
+        guard let app = (try? fm.contentsOfDirectory(at: work, includingPropertiesForKeys: nil))?
             .first(where: { $0.pathExtension == "app" }) else {
-            try? fm.removeItem(at: folder)
             throw UpdateError(message: "The download did not contain the app. Please try again later.")
         }
         guard Self.isSignedByUs(app) else {
-            try? fm.removeItem(at: folder)
             throw UpdateError(message: "The downloaded app is not signed by the developer of Mac Energy Monitor, so it was deleted.")
         }
-        return app
+
+        let dest = parent.appendingPathComponent(app.lastPathComponent)
+        let place = fm.displayName(atPath: parent.path)
+        // Never overwrite the app that is running (e.g. when Applications is chosen).
+        if dest.resolvingSymlinksInPath().standardizedFileURL == Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL {
+            throw UpdateError(message: "The Mac Energy Monitor you are using is in \(place). Click Try Again and choose another folder, for example Downloads.")
+        }
+        // An older downloaded copy with the same name goes to the Trash.
+        if fm.fileExists(atPath: dest.path) { try? fm.trashItem(at: dest, resultingItemURL: nil) }
+        do {
+            try fm.moveItem(at: app, to: dest)
+        } catch {
+            throw UpdateError(message: "The new version could not be saved in \(place). Click Try Again and choose another folder.")
+        }
+        return dest
     }
 
     /// The Downloads folder (created if missing), or nil if it can't be used.
     private static func downloadsFolder() -> URL? {
         try? FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-    }
-
-    /// A fresh, writable folder `name` inside `parent`, or nil if that's not possible.
-    private static func makeFolder(_ name: String, in parent: URL) -> URL? {
-        let fm = FileManager.default
-        let folder = parent.appendingPathComponent(name, isDirectory: true)
-        try? fm.removeItem(at: folder)
-        guard (try? fm.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
-              fm.isWritableFile(atPath: folder.path) else { return nil }
-        return folder
     }
 
     private static func askForFolder() -> URL? {
