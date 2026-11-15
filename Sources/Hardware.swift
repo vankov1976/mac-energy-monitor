@@ -257,7 +257,8 @@ struct InfoNote: View {
             }
             .buttonStyle(.link)
             Spacer()
-            SupportLink().font(.caption)
+            VersionLink().font(.caption)
+            SupportLink().font(.caption).padding(.leading, 12)
         }
     }
 }

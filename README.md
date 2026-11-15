@@ -8,7 +8,7 @@ A small native menu bar app for Apple silicon Macs that shows **how much power y
 - **Long-term history:** macOS keeps its power logs for only about 10 days. The app saves a small summary of every finished day, so its history goes back as far as the app has been running.
 - **Start at login** (hidden, menu bar only), light/dark appearance, and it remembers your views and filters.
 
-No admin rights, no network access, no tracking. Everything stays on your Mac.
+No admin rights, no tracking. The only network access is an optional check for new versions on GitHub; everything else stays on your Mac.
 
 ![Live view: whole-Mac power, breakdown by hardware part, and the apps using power right now](docs/live.png)
 
@@ -37,6 +37,10 @@ It was developed and tested on an M1 Pro with macOS 27. Other chips and macOS ve
 3. Open it. The app is signed with an Apple Developer ID and notarized by Apple, so macOS only asks once whether you want to open an app downloaded from the internet. Click **Open**.
 
 Prefer not to run a downloaded app? Build it yourself (next section). The result is the same.
+
+## Updates
+
+Click the version at the bottom of the window or the menu bar panel to open **About**, then **Check for Updates**. It shows what's new and downloads the new version. Unzip it, quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one); your settings and history are kept. To be told about new versions automatically, turn on **Check automatically every day** in About (off by default; it's the app's only network access).
 
 ## Build from source
 

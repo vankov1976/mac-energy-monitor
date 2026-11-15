@@ -116,6 +116,7 @@ struct MenuBarView: View {
                 }
             }
             if let e = model.error { Text(e).font(.caption).foregroundStyle(.red) }
+            UpdateBanner()
             Divider()
             StartAtLoginToggle()
             Divider()
@@ -124,6 +125,8 @@ struct MenuBarView: View {
                     close()
                     StatusBarController.showMainWindow()
                 }
+                Spacer()
+                VersionLink(before: { close() }).font(.caption)
                 Spacer()
                 SupportLink(iconOnly: true).buttonStyle(.borderless)
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
@@ -260,6 +263,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     func applicationDidFinishLaunching(_ note: Notification) {
         if !Self.isDiagnosticRun {
             FrontAppLog.shared.start()
+            UpdateChecker.shared.start()
         }
         launchedAtLogin = launchedAtLogin || Self.isLoginLaunch()
         if launchedAtLogin {

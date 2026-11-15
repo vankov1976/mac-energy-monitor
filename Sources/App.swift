@@ -23,23 +23,15 @@ struct EnergyMonitorApp: App {
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Mac Energy Monitor") { Self.showAbout() }
+                UpdateCommands()
             }
         }
     }
 
     static let homepage = URL(string: "https://github.com/vankov1976/mac-energy-monitor")!
 
-    /// macOS's standard About panel, with "Version 1.0" (no build number) and the project link below it.
-    static func showAbout() {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        let link = NSAttributedString(string: "github.com/vankov1976/mac-energy-monitor", attributes: [
-            .link: homepage, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .paragraphStyle: style])
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationVersion: version, .version: "", .credits: link])
-    }
+    /// The About window (with the Download box when the update check found a newer version).
+    static func showAbout() { AboutWindow.show() }
 }
 
 enum Preset: String, CaseIterable, Identifiable {
@@ -117,6 +109,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            UpdateBanner()
             controls
             if preset == .custom { customRow }
             if preset == .live {
