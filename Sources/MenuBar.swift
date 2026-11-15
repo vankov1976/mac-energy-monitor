@@ -116,7 +116,7 @@ struct MenuBarView: View {
                 }
             }
             if let e = model.error { Text(e).font(.caption).foregroundStyle(.red) }
-            UpdateBanner()
+            UpdateBanner(before: { close() })
             Divider()
             StartAtLoginToggle()
             Divider()

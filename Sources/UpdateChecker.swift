@@ -76,18 +76,42 @@ final class UpdateChecker: ObservableObject {
         timer?.invalidate()
         timer = nil
         guard automatic else { return }
-        Task { await check(manual: false) }
+        Task { await fetch() }     // silent: only the banner shows a result
         timer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { _ in
-            Task { @MainActor in await UpdateChecker.shared.check(manual: false) }
+            Task { @MainActor in await UpdateChecker.shared.fetch() }
         }
     }
 
-    /// Manual checks always answer with a message; automatic ones stay silent and only show the banner.
-    func check(manual: Bool) async {
-        let ok = await fetch()
-        guard manual else { return }
-        if ok { report(available) }
-        else { alert("Couldn't check for updates", "GitHub could not be reached. Check the internet connection and try again.") }
+    /// Result of the last "Check for Updates", shown in About.
+    enum CheckState { case idle, checking, upToDate, failed }
+    @Published var checkState = CheckState.idle
+
+    /// "Check for Updates" (About button and app menu): asks GitHub; About shows the result.
+    func checkNow() {
+        guard checkState != .checking else { return }
+        checkState = .checking
+        Task {
+            let ok = await fetch()
+            checkState = ok ? (available == nil ? .upToDate : .idle) : .failed
+        }
+    }
+
+    /// App menu "Check for Updates…": About opens only when there is an update;
+    /// otherwise a short message says "up to date" or that GitHub could not be reached.
+    func checkFromMenu() {
+        Task {
+            let ok = await fetch()
+            if ok && available != nil {
+                AboutWindow.show()
+            } else {
+                let a = NSAlert()
+                a.messageText = ok ? "You're up to date" : "Couldn't check for updates"
+                a.informativeText = ok ? "Mac Energy Monitor \(current) is the newest version."
+                                       : "GitHub could not be reached. Check the internet connection and try again."
+                NSApp.activate(ignoringOtherApps: true)
+                a.runModal()
+            }
+        }
     }
 
     /// Asks GitHub and updates `available`; false if GitHub could not be reached. No messages (About shows the result itself).
@@ -109,32 +133,7 @@ final class UpdateChecker: ObservableObject {
         UpdateDownloader.shared.start(r)
     }
 
-    static let howTo = "Download saves the new version in your Downloads folder and shows it in Finder. Then quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one). Your settings and saved history are kept."
-
     private static var releases: URL { EnergyMonitorApp.homepage.appendingPathComponent("releases") }
-
-    private func report(_ r: Release?) {
-        guard let r else {
-            alert("You're up to date", "Mac Energy Monitor \(current) is the newest version.")
-            return
-        }
-        let a = NSAlert()
-        a.messageText = "Version \(r.version) is available"
-        let news = r.notes.isEmpty ? "" : "What's new:\n\(r.notes)\n\n"
-        a.informativeText = news + "You have version \(current). " + Self.howTo
-        a.addButton(withTitle: "Download")
-        a.addButton(withTitle: "Later")
-        NSApp.activate(ignoringOtherApps: true)
-        if a.runModal() == .alertFirstButtonReturn { download() }
-    }
-
-    private func alert(_ title: String, _ text: String) {
-        let a = NSAlert()
-        a.messageText = title
-        a.informativeText = text
-        NSApp.activate(ignoringOtherApps: true)
-        a.runModal()
-    }
 
     /// Compares dotted version numbers part by part: 1.0.10 > 1.0.9, 1.1 > 1.0.1, 1.0 == 1.0.0.
     nonisolated static func isNewer(_ a: String, than b: String) -> Bool {
@@ -147,9 +146,11 @@ final class UpdateChecker: ObservableObject {
     }
 }
 
-/// "Version X is available · Download" line, shown in the window and the menu bar panel when a newer version was found.
+/// "Version X is available · What's new" line, shown in the window and the menu bar panel when a newer version
+/// was found. The button opens About, where the user reads what's new and decides whether to download.
 struct UpdateBanner: View {
     @ObservedObject var checker = UpdateChecker.shared
+    var before: () -> Void = {}
 
     var body: some View {
         if let r = checker.available {
@@ -157,11 +158,14 @@ struct UpdateBanner: View {
                 Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
                 Text("Version \(r.version) is available").font(.callout)
                 Spacer(minLength: 4)
-                Button("Download") { checker.download() }.controlSize(.small)
+                Button("What's New") {
+                    before()
+                    AboutWindow.show()
+                }
+                .controlSize(.small)
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            .help(r.notes.isEmpty ? "" : "What's new:\n" + r.notes)
         }
     }
 }
@@ -171,7 +175,7 @@ struct UpdateCommands: View {
     @ObservedObject var checker = UpdateChecker.shared
 
     var body: some View {
-        Button("Check for Updates…") { Task { await checker.check(manual: true) } }
+        Button("Check for Updates…") { checker.checkFromMenu() }
         Toggle("Check for Updates Automatically", isOn: $checker.automatic)
     }
 }

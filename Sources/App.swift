@@ -191,8 +191,10 @@ if preset != .live {
 
             Spacer()
             StartAtLoginToggle()
-            // Always takes its space, so the buttons don't shift while a time frame loads.
-            ProgressView().controlSize(.small).opacity(model.loading ? 1 : 0)
+            // Quit, like in the menu bar panel (closing the window keeps the app in the menu bar).
+            Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                .help("Quit")
+                .accessibilityLabel("Quit Mac Energy Monitor")
         }
         .labelsHidden()
     }

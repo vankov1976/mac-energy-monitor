@@ -33,16 +33,23 @@ final class UpdateDownloader: NSObject, ObservableObject {
         // Test builds only: `defaults write local.mac-energy-monitor updateTestZipURL <url>` (e.g. a file:// zip).
         if let t = UserDefaults.standard.string(forKey: "updateTestZipURL"), let u = URL(string: t) { zip = u }
 #endif
+        // The user picks where to save it (starting in Downloads). Cancel: back to the Download button, no message.
+        guard let parent = Self.askForFolder() else {
+            state = .idle
+            return
+        }
         version = r.version
         state = .downloading(0)
         Task {
             do {
-                let app = try await fetchAndUnpack(zip, version: r.version)
-                state = .ready(app)
-                reveal(app)
+                let app = try await fetchAndUnpack(zip, version: r.version, into: parent)
+                state = .ready(app)       // About shows where it is; Finder only opens via "Show in Finder"
+            } catch let e as UpdateError {
+                state = .failed(e.message)
+            } catch is URLError {
+                state = .failed("The download failed. Check the internet connection and try again.")
             } catch {
-                state = .failed((error as? UpdateError)?.message
-                    ?? "The download failed. Check the internet connection and try again.")
+                state = .failed("The new version could not be saved: \(error.localizedDescription)")
             }
         }
     }
@@ -56,15 +63,15 @@ final class UpdateDownloader: NSObject, ObservableObject {
 
     struct UpdateError: Error { let message: String }
 
-    private func fetchAndUnpack(_ url: URL, version: String) async throws -> URL {
+    /// Downloads, then unpacks into "<parent>/Mac Energy Monitor <version>" (its own folder, so nothing else is touched).
+    private func fetchAndUnpack(_ url: URL, version: String, into parent: URL) async throws -> URL {
         let tmpZip = try await download(url)
         defer { try? FileManager.default.removeItem(at: tmpZip) }
 
         let fm = FileManager.default
-        let downloads = try fm.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let folder = downloads.appendingPathComponent("Mac Energy Monitor \(version)", isDirectory: true)
-        try? fm.removeItem(at: folder)
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        guard let folder = Self.makeFolder("Mac Energy Monitor \(version)", in: parent) else {
+            throw UpdateError(message: "The new version could not be saved in \(fm.displayName(atPath: parent.path)). Click Try Again and choose another folder.")
+        }
 
         try await Self.run("/usr/bin/ditto", ["-x", "-k", tmpZip.path, folder.path])
         guard let app = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
@@ -77,6 +84,35 @@ final class UpdateDownloader: NSObject, ObservableObject {
             throw UpdateError(message: "The downloaded app is not signed by the developer of Mac Energy Monitor, so it was deleted.")
         }
         return app
+    }
+
+    /// The Downloads folder (created if missing), or nil if it can't be used.
+    private static func downloadsFolder() -> URL? {
+        try? FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+    }
+
+    /// A fresh, writable folder `name` inside `parent`, or nil if that's not possible.
+    private static func makeFolder(_ name: String, in parent: URL) -> URL? {
+        let fm = FileManager.default
+        let folder = parent.appendingPathComponent(name, isDirectory: true)
+        try? fm.removeItem(at: folder)
+        guard (try? fm.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
+              fm.isWritableFile(atPath: folder.path) else { return nil }
+        return folder
+    }
+
+    private static func askForFolder() -> URL? {
+        let p = NSOpenPanel()
+        p.title = "Choose a Folder"
+        p.message = "Choose where to save the new version of Mac Energy Monitor."
+        p.prompt = "Save Here"
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.canCreateDirectories = true
+        p.allowsMultipleSelection = false
+        p.directoryURL = downloadsFolder() ?? FileManager.default.homeDirectoryForCurrentUser
+        NSApp.activate(ignoringOtherApps: true)
+        return p.runModal() == .OK ? p.url : nil
     }
 
     private var continuation: CheckedContinuation<URL, Error>?

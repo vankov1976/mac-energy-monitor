@@ -21,7 +21,10 @@ enum AboutWindow {
             window = w
         }
         guard let w = window else { return }
-        if !w.isVisible { w.contentView = NSHostingView(rootView: AboutView()) }   // fresh, without an old check result
+        if !w.isVisible {           // fresh, without an old check result
+            if UpdateChecker.shared.checkState != .checking { UpdateChecker.shared.checkState = .idle }
+            w.contentView = NSHostingView(rootView: AboutView())
+        }
         NSApp.activate(ignoringOtherApps: true)
         // Like other Mac apps' About: centered on top of the app's window, which stays visible behind it
         // (and moves with it). Without a visible window (opened from the menu bar panel): centered on screen, on top.
@@ -46,8 +49,7 @@ enum AboutWindow {
 
 struct AboutView: View {
     @ObservedObject var checker = UpdateChecker.shared
-    @State private var state = CheckState.idle
-    private enum CheckState { case idle, checking, upToDate, failed }
+    private var state: UpdateChecker.CheckState { checker.checkState }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -93,13 +95,7 @@ extension AboutView {
     /// "Check for Updates" in About, with the result shown right below it (no extra message window).
     @ViewBuilder var checkRow: some View {
         VStack(spacing: 6) {
-            Button {
-                state = .checking
-                Task {
-                    let ok = await checker.fetch()
-                    state = ok ? (checker.available == nil ? .upToDate : .idle) : .failed
-                }
-            } label: {
+            Button { checker.checkNow() } label: {
                 HStack(spacing: 6) {
                     if state == .checking { ProgressView().controlSize(.small) }
                     Text(state == .checking ? "Checking…" : "Check for Updates")
@@ -134,7 +130,7 @@ struct DownloadControls: View {
             switch dl.state {
             case .idle:
                 Button("Download") { checker.download() }.keyboardShortcut(.defaultAction)
-                hint("The new version is saved in your Downloads folder and shown in Finder.")
+                hint("You choose where to save the new version.")
             case .downloading(let f):
                 ProgressView(value: f).frame(width: 180)
                 Text("Downloading… \(Int(f * 100))%").font(.caption).monospacedDigit()
@@ -144,7 +140,7 @@ struct DownloadControls: View {
                     Text("Downloaded")
                 }
                 .font(.callout)
-                hint("It's in Downloads › \(app.deletingLastPathComponent().lastPathComponent). Quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one).")
+                hint("It's in \(Self.place(of: app)). Quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one).")
                 HStack(spacing: 10) {     // two buttons of the same width, centered
                     Button { dl.reveal(app) } label: { Text("Show in Finder").frame(maxWidth: .infinity) }
                     Button { NSApp.terminate(nil) } label: { Text("Quit App").frame(maxWidth: .infinity) }
@@ -156,6 +152,13 @@ struct DownloadControls: View {
                 Button("Try Again") { checker.download() }
             }
         }
+    }
+
+    /// "Downloads › Mac Energy Monitor 1.1" (folder names as Finder shows them).
+    static func place(of app: URL) -> String {
+        let folder = app.deletingLastPathComponent(), parent = folder.deletingLastPathComponent()
+        let fm = FileManager.default
+        return fm.displayName(atPath: parent.path) + " › " + fm.displayName(atPath: folder.path)
     }
 
     private func hint(_ s: String) -> some View {
