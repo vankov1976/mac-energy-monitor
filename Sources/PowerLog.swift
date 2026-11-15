@@ -62,35 +62,33 @@ final class PowerLog: @unchecked Sendable {
     private var lastCopy = Date.distantPast
 
     init() {
-        cache = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MacEnergyMonitor")
+        // In Application Support (not Caches), so cleaning apps don't delete it while the app runs.
+        cache = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MacEnergyMonitor/PowerLogs")
+        // Versions up to 1.1.1 kept these files in Caches: move them over once (or drop them if already moved).
+        let old = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MacEnergyMonitor")
+        if fm.fileExists(atPath: old.path) {
+            try? fm.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !fm.fileExists(atPath: cache.path) { try? fm.moveItem(at: old, to: cache) }
+            try? fm.removeItem(at: old)
+        }
         try? fm.createDirectory(at: cache, withIntermediateDirectories: true)
     }
 
     // MARK: log files
 
-    /// Decompressed archives (kept in Caches) plus a fresh copy of the current log.
+    /// Decompressed archives (kept in Application Support/MacEnergyMonitor/PowerLogs) plus a fresh copy of the current log.
     func databases() throws -> [String] {
         let archives = Self.logDir + "/Archives"
         var out: [String] = []
+        // If the folder was deleted anyway while the app runs, recreate it; the archives are simply unpacked again.
+        try? fm.createDirectory(at: cache, withIntermediateDirectories: true)
         let files = (try? fm.contentsOfDirectory(atPath: archives)) ?? []
         for f in files.sorted() where f.hasSuffix(".PLSQL.gz") {
             let dest = cache.appendingPathComponent(String(f.dropLast(3))).path
             if !fm.fileExists(atPath: dest) {
-                let tmp = dest + ".tmp"
-                fm.createFile(atPath: tmp, contents: nil)
-                let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: tmp))
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/gunzip")
-                p.arguments = ["-c", archives + "/" + f]
-                p.standardOutput = handle
-                p.standardError = FileHandle.nullDevice
-                try p.run()
-                p.waitUntilExit()
-                try handle.close()
-                guard p.terminationStatus == 0 else { try? fm.removeItem(atPath: tmp); continue }
-                try? fm.removeItem(atPath: dest)
-                try fm.moveItem(atPath: tmp, toPath: dest)
+                // One archive that can't be unpacked is left out; the others still count.
+                guard (try? unpack(archives + "/" + f, to: dest)) == true else { continue }
             }
             out.append(dest)
         }
@@ -119,6 +117,27 @@ final class PowerLog: @unchecked Sendable {
         }
         out.append(cur)
         return out
+    }
+
+    /// gunzip `src` into `dest` (via a .tmp file, so an interrupted run leaves no half file). False if gunzip failed.
+    private func unpack(_ src: String, to dest: String) throws -> Bool {
+        let tmp = dest + ".tmp"
+        try? fm.removeItem(atPath: tmp)
+        guard fm.createFile(atPath: tmp, contents: nil) else { return false }
+        defer { try? fm.removeItem(atPath: tmp) }
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: tmp))
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/gunzip")
+        p.arguments = ["-c", src]
+        p.standardOutput = handle
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        try handle.close()
+        guard p.terminationStatus == 0 else { return false }
+        try? fm.removeItem(atPath: dest)
+        try fm.moveItem(atPath: tmp, toPath: dest)
+        return true
     }
 
     /// Runs `sql` on every log and calls `body` for each row not seen before
