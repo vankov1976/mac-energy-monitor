@@ -175,8 +175,9 @@ struct BreakdownStrip: View {
         let parts = breakdown.parts.sorted { $0.value > $1.value }
         let whole = max(breakdown.whole, 1e-9)
         let top = max(parts.first?.value ?? 0, 1e-9)
+        let pct = Self.roundedPercents(parts.map { $0.value / whole * 100 })
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(parts) { p in
+            ForEach(Array(parts.enumerated()), id: \.element.id) { i, p in
                 HStack(spacing: 8) {
                     Image(systemName: p.icon).foregroundStyle(p.color).frame(width: 18)
                     Text(p.name).frame(width: 230, alignment: .leading).lineLimit(1)
@@ -185,7 +186,7 @@ struct BreakdownStrip: View {
                     Capsule().fill(p.color.gradient)
                         .frame(width: max(2, 120 * p.value / top), height: 6)
                         .frame(width: 120, alignment: .leading)
-                    Text("\((p.value / whole * 100).formatted(.number.precision(.fractionLength(0))))%")
+                    Text("\(pct[i])%")
                         .foregroundStyle(.secondary).monospacedDigit().frame(width: 40, alignment: .trailing)
                     Text("\(fmt(p.value)) \(unit)").monospacedDigit().fontWeight(.semibold)
                         .frame(width: 90, alignment: .trailing)
@@ -204,6 +205,18 @@ struct BreakdownStrip: View {
 
     private func fmt(_ v: Double) -> String {
         v.formatted(.number.precision(.fractionLength(v < 10 ? 2 : 1)))
+    }
+
+    /// Whole-number percentages that add up to the rounded total (100 when the parts make up the whole):
+    /// round everything down, then give the missing points to the largest remainders.
+    static func roundedPercents(_ exact: [Double]) -> [Int] {
+        let e = exact.map { max(0, $0) }
+        var r = e.map { Int($0.rounded(.down)) }
+        var missing = Int(e.reduce(0, +).rounded()) - r.reduce(0, +)
+        for i in e.indices.sorted(by: { e[$0] - Double(r[$0]) > e[$1] - Double(r[$1]) }) where missing > 0 {
+            r[i] += 1; missing -= 1
+        }
+        return r
     }
 }
 
