@@ -67,16 +67,24 @@ final class Model: ObservableObject {
     @Published var loading = false
     @Published var error: String?
 
+    private var generation = 0
+
     /// `from == nil` means "All": from the oldest data (looked up first, on the log queue).
-    func load(from: Date?, to: Date, onRange: ((Date) -> Void)? = nil) {
+    /// `clear`: a different period was chosen — drop the old figures at once, so the loading indicator shows
+    /// instead of the previous period's data until the new one is read. Only the newest request is shown.
+    func load(from: Date?, to: Date, clear: Bool = false, onRange: ((Date) -> Void)? = nil) {
+        generation += 1
+        let gen = generation
         loading = true
         error = nil
+        if clear { report = nil }
         let log = sharedLog
         logQueue.async {
             let range = try? log.fullRange()
             let start = from ?? range?.lowerBound ?? to.addingTimeInterval(-14 * 86400)
             let result = Result { try log.fullReport(from: start, to: to) }
             DispatchQueue.main.async {
+                guard gen == self.generation else { return }   // a newer request is on its way
                 self.loading = false
                 if let range { self.available = range }
                 onRange?(start)
@@ -185,7 +193,7 @@ if preset != .live {
                 if p == .custom {   // keep the dates shown so far and remember them for the next start
                     UserDefaults.standard.set(from.timeIntervalSince1970, forKey: "customFrom")
                     UserDefaults.standard.set(to.timeIntervalSince1970, forKey: "customTo")
-                } else if p != .live { reload() }
+                } else if p != .live { reload(clear: true) }
             }
 
             Spacer()
@@ -205,7 +213,7 @@ if preset != .live {
             Text("to").foregroundStyle(.secondary)
             DatePicker("To", selection: $to.saved("customTo"), in: from...Date())
                 .labelsHidden()
-            Button("Apply") { reload() }.keyboardShortcut(.defaultAction)
+            Button("Apply") { reload(clear: true) }.keyboardShortcut(.defaultAction)
             Spacer()
         }
     }
@@ -389,20 +397,22 @@ if preset != .live {
 
     private func shownEnergy(_ wh: Double) -> Double { Self.shownEnergy(wh) }
     private func duration(_ hours: Double) -> String { Self.duration(hours) }
-    private func reload() {
+    /// `clear`: a new period (time-frame button or Apply) — show the loading indicator, not the old figures.
+    /// Refresh keeps the current figures until the new ones are ready.
+    private func reload(clear: Bool = false) {
         let now = Date()
         switch preset {
         case .live:
             return
         case .custom:
-            model.load(from: from, to: to)
+            model.load(from: from, to: to, clear: clear)
         case .all:
             to = now
-            model.load(from: nil, to: now) { start in from = start }   // the real oldest data, not a guess
+            model.load(from: nil, to: now, clear: clear) { start in from = start }   // the real oldest data, not a guess
         default:
             to = now
             from = now.addingTimeInterval(-(preset.hours ?? 168) * 3600)
-            model.load(from: from, to: to)
+            model.load(from: from, to: to, clear: clear)
         }
     }
 }
