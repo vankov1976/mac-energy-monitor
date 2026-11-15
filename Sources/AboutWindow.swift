@@ -145,10 +145,11 @@ struct DownloadControls: View {
                 }
                 .font(.callout)
                 hint("It's in Downloads › \(app.deletingLastPathComponent().lastPathComponent). Quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one).")
-                HStack(spacing: 10) {
-                    Button("Show in Finder") { dl.reveal(app) }
-                    Button("Quit App") { NSApp.terminate(nil) }
+                HStack(spacing: 10) {     // two buttons of the same width, centered
+                    Button { dl.reveal(app) } label: { Text("Show in Finder").frame(maxWidth: .infinity) }
+                    Button { NSApp.terminate(nil) } label: { Text("Quit App").frame(maxWidth: .infinity) }
                 }
+                .frame(width: 230)
             case .failed(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
