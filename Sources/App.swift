@@ -136,7 +136,7 @@ struct ContentView: View {
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                filters
+                if model.report != nil { filters }    // no filters while the period is being read
                 table
             }
 if preset != .live {
@@ -169,7 +169,7 @@ if preset != .live {
             }
             ToolbarItem {
                 if preset != .live {    // Live updates by itself
-                    Button { reload() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    Button { reload(clear: true) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .help("Reload the power logs")
                 }
             }
@@ -397,8 +397,7 @@ if preset != .live {
 
     private func shownEnergy(_ wh: Double) -> Double { Self.shownEnergy(wh) }
     private func duration(_ hours: Double) -> String { Self.duration(hours) }
-    /// `clear`: a new period (time-frame button or Apply) — show the loading indicator, not the old figures.
-    /// Refresh keeps the current figures until the new ones are ready.
+    /// `clear`: a new period or Refresh — show the loading indicator, not the old figures.
     private func reload(clear: Bool = false) {
         let now = Date()
         switch preset {
