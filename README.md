@@ -34,13 +34,7 @@ It was developed and tested on an M1 Pro with macOS 27. Other chips and macOS ve
 
 1. Download `Mac-Energy-Monitor.zip` from the [Releases](../../releases) page and unzip it.
 2. Move **Mac Energy Monitor.app** to your **Applications** folder.
-3. Open it. Because the app isn't notarized by Apple, macOS shows a warning the first time: **"Mac Energy Monitor" Not Opened. Apple could not verify "Mac Energy Monitor" is free of malware…** Click **Done** (not "Move to Trash"). Then allow it once:
-   - Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open Anyway** next to "Mac Energy Monitor" (available for about an hour after you tried to open the app).
-   - Confirm with your login password and click **Open**.
-
-   After that, it opens normally.
-
-   Apple describes the steps in [Open a Mac app from an unknown developer](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
+3. Open it. The app is signed with an Apple Developer ID and notarized by Apple, so macOS only asks once whether you want to open an app downloaded from the internet. Click **Open**.
 
 Prefer not to run a downloaded app? Build it yourself (next section). The result is the same.
 
@@ -54,7 +48,9 @@ cd mac-energy-monitor
 ./build.sh
 ```
 
-The app is written to `build/Mac Energy Monitor.app`. Move it to `/Applications`.
+The app is written to `build/Mac Energy Monitor.app`. Move it to `/Applications`. (A build of your own is signed only locally, which is fine on the Mac that built it.)
+
+Maintainers: `tools/release.sh` builds the signed and notarized release zip (needs an Apple Developer ID certificate and a `notarytool` profile, see the script).
 
 ## Where the numbers come from
 
