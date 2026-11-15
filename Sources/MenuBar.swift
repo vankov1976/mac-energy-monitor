@@ -320,7 +320,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             model.refresh()
             LiveBreakdown.shared.start()
             popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            if let w = popover.contentViewController?.view.window {
+                // Also over full-screen apps (their own Space): without this macOS keeps the panel off screen.
+                w.collectionBehavior.formUnion([.fullScreenAuxiliary, .canJoinAllSpaces])
+                w.orderFrontRegardless()
+                w.makeKey()
+            }
         }
     }
 }
