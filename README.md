@@ -40,7 +40,7 @@ Prefer not to run a downloaded app? Build it yourself (next section). The result
 
 ## Updates
 
-Click the version at the bottom of the window or the menu bar panel to open **About**, then **Check for Updates**. It shows what's new and downloads the new version. Unzip it, quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one); your settings and history are kept. To be told about new versions automatically, turn on **Check automatically every day** in About (off by default; it's the app's only network access).
+Click the version at the bottom of the window or the menu bar panel to open **About**, then **Check for Updates**. It shows what's new; **Download** saves the new version, already unpacked and checked, in your Downloads folder and shows it in Finder. Quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one); your settings and history are kept. To be told about new versions automatically, turn on **Check automatically every day** in About (off by default; it's the app's only network access).
 
 ## Build from source
 

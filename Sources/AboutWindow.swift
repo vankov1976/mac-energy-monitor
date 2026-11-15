@@ -74,10 +74,7 @@ struct AboutView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    Button("Download") { checker.download() }.keyboardShortcut(.defaultAction)
-                    Text("Double-click the downloaded zip to unpack it, quit Mac Energy Monitor and drag the unpacked app into your Applications folder.")
-                        .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                    DownloadControls()
                 }
                 .padding(10).frame(maxWidth: .infinity)
                 .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
@@ -124,6 +121,45 @@ extension AboutView {
             Toggle("Check automatically every day", isOn: $checker.automatic)
                 .toggleStyle(.checkbox).font(.caption).padding(.top, 2)
         }
+    }
+}
+
+/// Download button, then progress, then where the new app is and what to do with it.
+struct DownloadControls: View {
+    @ObservedObject var checker = UpdateChecker.shared
+    @ObservedObject var dl = UpdateDownloader.shared
+
+    var body: some View {
+        VStack(spacing: 8) {
+            switch dl.state {
+            case .idle:
+                Button("Download") { checker.download() }.keyboardShortcut(.defaultAction)
+                hint("The new version is saved in your Downloads folder and shown in Finder.")
+            case .downloading(let f):
+                ProgressView(value: f).frame(width: 180)
+                Text("Downloading… \(Int(f * 100))%").font(.caption).monospacedDigit()
+            case .ready(let app):
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Downloaded")
+                }
+                .font(.callout)
+                hint("It's in Downloads › \(app.deletingLastPathComponent().lastPathComponent). Quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one).")
+                HStack(spacing: 10) {
+                    Button("Show in Finder") { dl.reveal(app) }
+                    Button("Quit App") { NSApp.terminate(nil) }
+                }
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                Button("Try Again") { checker.download() }
+            }
+        }
+    }
+
+    private func hint(_ s: String) -> some View {
+        Text(s).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

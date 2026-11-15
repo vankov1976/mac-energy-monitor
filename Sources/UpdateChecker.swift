@@ -102,12 +102,14 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
-    /// Downloads the zip with the browser (into Downloads); the release page if no zip is attached.
+    /// Downloads the new version inside the app; About shows the progress and the result.
     func download() {
-        NSWorkspace.shared.open(available?.download ?? available?.page ?? Self.releases)
+        guard let r = available else { NSWorkspace.shared.open(Self.releases); return }
+        AboutWindow.show()
+        UpdateDownloader.shared.start(r)
     }
 
-    static let howTo = "To update: download the zip, double-click it to unpack it, quit Mac Energy Monitor and drag the unpacked app into your Applications folder (replace the old one). Your settings and saved history are kept."
+    static let howTo = "Download saves the new version in your Downloads folder and shows it in Finder. Then quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one). Your settings and saved history are kept."
 
     private static var releases: URL { EnergyMonitorApp.homepage.appendingPathComponent("releases") }
 
