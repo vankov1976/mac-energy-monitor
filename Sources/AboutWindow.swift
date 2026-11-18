@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 enum AboutWindow {
     private static var window: NSWindow?
+    /// The app window was closed by "Show in Finder"; closing About brings it back.
+    private static var reopenMainOnClose = false
 
     static func show() {
         if window == nil {
@@ -16,12 +18,19 @@ enum AboutWindow {
             w.contentView = NSHostingView(rootView: AboutView())
             // Detach from the main window when closed, so it doesn't come back with it.
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
-                MainActor.assumeIsolated { w.parent?.removeChildWindow(w) }
+                MainActor.assumeIsolated {
+                    w.parent?.removeChildWindow(w)
+                    if reopenMainOnClose {
+                        reopenMainOnClose = false
+                        DispatchQueue.main.async { StatusBarController.showMainWindow() }
+                    }
+                }
             }
             window = w
         }
         guard let w = window else { return }
         if !w.isVisible {           // fresh, without an old check result
+            reopenMainOnClose = false
             if UpdateChecker.shared.checkState != .checking { UpdateChecker.shared.checkState = .idle }
             w.contentView = NSHostingView(rootView: AboutView())
         }
@@ -51,6 +60,19 @@ enum AboutWindow {
             }
         }
         w.makeKeyAndOrderFront(nil)
+    }
+
+    /// "Show in Finder": if the app window is open, it closes so Finder is not hidden behind it;
+    /// About stays where it is and brings the app window back when it is closed.
+    static func revealInFinder(_ app: URL) {
+        if let w = window, let main = w.parent ?? NSApp.windows.first(where: {
+            StatusBarController.isMainWindow($0) && $0.isVisible && !$0.isMiniaturized }) {
+            main.removeChildWindow(w)
+            w.level = .floating
+            reopenMainOnClose = true
+            main.close()
+        }
+        UpdateDownloader.shared.reveal(app)
     }
 }
 
@@ -149,7 +171,7 @@ struct DownloadControls: View {
                 .font(.callout)
                 hint("It's in \(Self.place(of: app)). Quit Mac Energy Monitor and drag the new app into your Applications folder (replace the old one).")
                 HStack(spacing: 10) {     // two buttons of the same width, centered
-                    Button { dl.reveal(app) } label: { Text("Show in Finder").frame(maxWidth: .infinity) }
+                    Button { AboutWindow.revealInFinder(app) } label: { Text("Show in Finder").frame(maxWidth: .infinity) }
                     Button { NSApp.terminate(nil) } label: { Text("Quit App").frame(maxWidth: .infinity) }
                 }
                 .frame(width: 230)

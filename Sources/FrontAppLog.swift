@@ -67,6 +67,7 @@ final class FrontAppLog: @unchecked Sendable {
         timer = Timer.scheduledTimer(withTimeInterval: Self.aliveEvery, repeats: true) { _ in
             FrontAppLog.shared.record("#alive")
         }
+        timer?.tolerance = Self.aliveEvery * 0.1
     }
 
     /// Called when the app quits: from now on nothing is known.

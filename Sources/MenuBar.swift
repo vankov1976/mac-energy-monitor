@@ -15,15 +15,23 @@ final class MenuModel: ObservableObject {
     @Published var loading = false
     private var timer: Timer?
     private var liveSub: AnyCancellable?
+    /// The panel is open: only then is the average kept up to date (opening it reloads anyway).
+    var visible = false
 
     init() {
         let saved = Preset(rawValue: UserDefaults.standard.string(forKey: "menuPeriod") ?? "")
         period = saved.flatMap { Self.periods.contains($0) ? $0 : nil } ?? .hour
         liveSub = LivePower.shared.$current.sink { [weak self] w in self?.systemW = w }
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+        // The sleep log arrived (read in the background): the average while awake changes, so reload.
+        NotificationCenter.default.addObserver(forName: PMSetLog.updated, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.visible == true { self?.refresh() } }
         }
+        // While the panel is open, the average follows new log entries; closed, nothing runs (saves energy).
+        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in if self?.visible == true { self?.refresh() } }
+        }
+        timer?.tolerance = 60
     }
 
     func refresh() {
@@ -43,8 +51,8 @@ final class MenuModel: ObservableObject {
                 switch result {
                 case .success(let r):
                     self.error = nil
-                    // Same as the window's "Avg. power" card: whole-Mac energy / hours with data.
-                    self.avgW = r.coveredHours > 0 && r.hardware.whole > 0 ? r.hardware.whole / r.coveredHours : nil
+                    // Same as the window's "Avg. power" card: energy while awake / hours awake.
+                    self.avgW = r.hardware.averageAwakeW(fallbackHours: r.coveredHours)
                 case .failure(let e):
                     self.error = e.localizedDescription
                 }
@@ -60,7 +68,7 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Power").font(.title2.weight(.semibold)).frame(maxWidth: .infinity)
+            // The two boxes, with the same space above (the panel's edge) and below (to the line): 14 pt.
             HStack(spacing: 10) {
                 statBox { Text("Whole Mac now").foregroundStyle(.secondary) } value: {
                     valueText(model.systemW)
@@ -78,11 +86,13 @@ struct MenuBarView: View {
                         .contentShape(Rectangle())
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                    .help("Choose the period for the average power")
+                    .help("Average power while the Mac was awake. Click to choose the period.")
                     .accessibilityLabel("Average power period, " + Self.periodName(model.period))
                 } value: {
                     HStack {
-                        valueText(model.avgW)
+                        // Loaded but nothing logged for the period yet: "N/A" with the reason, as in the window.
+                        valueText(model.avgW, missing: model.loading || model.error != nil ? "–– W" : "N/A")
+                            .help(model.avgW == nil && !model.loading ? "Not logged by macOS yet" : "")
                         Spacer(minLength: 4)
                         Button { model.refresh() } label: {
                             if model.loading { ProgressView().controlSize(.mini).frame(width: 14, height: 14) }
@@ -95,6 +105,7 @@ struct MenuBarView: View {
                     }
                 }
             }
+            .padding(.bottom, 4)            // + the stack's 10 pt spacing = 14 pt, as above
             Divider()
             HStack {
                 Text("Live breakdown").font(.caption).foregroundStyle(.secondary)
@@ -151,8 +162,8 @@ struct MenuBarView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15)))
     }
 
-    private func valueText(_ w: Double?) -> some View {
-        Text(w.map { fmt($0, 1) + " W" } ?? "–– W").font(.title3.weight(.semibold)).monospacedDigit()
+    private func valueText(_ w: Double?, missing: String = "–– W") -> some View {
+        Text(w.map { fmt($0, 1) + " W" } ?? missing).font(.title3.weight(.semibold)).monospacedDigit()
     }
 
     static func periodName(_ p: Preset) -> String {
@@ -261,6 +272,10 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // New sleeps can only appear after the Mac wakes: read macOS's sleep log again then (in the background).
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            PMSetLog.shared.markStale()
+        }
         if !Self.isDiagnosticRun {
             FrontAppLog.shared.start()
             UpdateChecker.shared.start()
@@ -299,12 +314,15 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         let textW = (sample as NSString).size(withAttributes: [.font: font]).width
         item.length = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
         watch = model.$systemW.sink { [weak self] w in
-            self?.item.button?.attributedTitle = NSAttributedString(
-                string: " " + (w.map(Self.label) ?? "–– W"), attributes: [.font: font])
+            let text = " " + (w.map(Self.label) ?? "–– W")
+            guard let self, text != self.lastTitle else { return }     // redraw the menu bar only when it changes
+            self.lastTitle = text
+            self.item.button?.attributedTitle = NSAttributedString(string: text, attributes: [.font: font])
         }
     }
 
-    func popoverDidClose(_ notification: Notification) { LiveBreakdown.shared.stop() }
+    func popoverDidClose(_ notification: Notification) { LiveBreakdown.shared.stop(); model.visible = false }
+    private var lastTitle = ""
 
     /// Always 4 characters before " W": "9.4" → " 9.4", "18.7", "105" (no decimal from 100 W).
     static func label(_ w: Double) -> String {
@@ -317,6 +335,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         guard let b = item.button else { return }
         if popover.isShown { popover.performClose(nil) }
         else {
+            model.visible = true
             model.refresh()
             LiveBreakdown.shared.start()
             popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)

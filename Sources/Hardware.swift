@@ -7,11 +7,20 @@ import SwiftUI
 struct Breakdown: Equatable, Codable {
     var display: Double?
     var cpu: Double?          // whole CPU
-    var apps = 0.0            // your apps' share (processor; history also includes their graphics)
+    var apps = 0.0            // your apps' processor energy (their graphics are in `gpu`)
     var gpu: Double?
     var memory: Double?       // DRAM
     var chip: Double?         // whole chip package (CPU + GPU + memory + the rest of the chip)
-    var total: Double?        // whole Mac, measured
+    var total: Double?        // whole Mac while awake, measured
+    // History only (nil live and in daily summaries saved before 1.1.5):
+    var sleep: Double?        // energy while asleep (Wh); nil = not known (e.g. desktop Mac)
+    var sleepEstimated: Bool? // part of `sleep` is estimated (charger connected during sleep)
+    var awakeH: Double?       // hours awake in the period
+    var sleepH: Double?       // hours asleep in the period (without switched off)
+    var offH: Double?         // hours switched off (a restart in a gap), counted with 0 Wh
+    // Days from daily summaries saved before 1.1.5, which don't know when the Mac slept:
+    var unknownH: Double?     // their hours (neither awake nor asleep is known)
+    var unknownWh: Double?    // their whole-Mac energy (counted in the parts, left out of the awake average)
 
     struct Part: Identifiable, Equatable {
         let id: String
@@ -25,11 +34,11 @@ struct Breakdown: Equatable, Codable {
         var p: [Part] = []
         if let display { p.append(Part(id: "display", name: "Display", icon: "display", color: .yellow, value: display)) }
         if let cpu {
-            p.append(Part(id: "apps", name: "CPU · your apps", icon: "app.badge", color: .blue, value: min(apps, cpu)))
-            p.append(Part(id: "system", name: "CPU · macOS system processes", icon: "gearshape.2", color: .indigo,
+            p.append(Part(id: "apps", name: "CPU · user apps/services", icon: "app.badge", color: .blue, value: min(apps, cpu)))
+            p.append(Part(id: "system", name: "CPU · system processes", icon: "gearshape.2", color: .indigo,
                           value: max(0, cpu - apps)))
         } else {
-            p.append(Part(id: "apps", name: "Your apps", icon: "app.badge", color: .blue, value: apps))
+            p.append(Part(id: "apps", name: "User apps/services", icon: "app.badge", color: .blue, value: apps))
         }
         if let gpu { p.append(Part(id: "gpu", name: "GPU", icon: "cube.transparent", color: .purple, value: gpu)) }
         if let memory { p.append(Part(id: "memory", name: "Memory", icon: "memorychip", color: .teal, value: memory)) }
@@ -43,19 +52,45 @@ struct Breakdown: Equatable, Codable {
             p.append(Part(id: "other", name: "Other hardware", icon: "externaldrive", color: .gray,
                           value: max(0, total - inner)))
         }
+        if let sleep { p.append(Part(id: "sleep", name: "Sleep", icon: "moon.zzz", color: .mint, value: sleep)) }
         return p
     }
 
     var whole: Double { parts.reduce(0) { $0 + $1.value } }
 
+    /// Average power while awake (W): the energy without sleep ÷ the hours awake.
+    /// Without a known awake time (old daily summaries): everything ÷ `fallbackHours`, as before 1.1.5.
+    func averageAwakeW(fallbackHours: Double) -> Double? {
+        if let awakeH, awakeH > 0.01 { return max(0, whole - (sleep ?? 0) - (unknownWh ?? 0)) / awakeH }
+        // Known, but (almost) never awake in the period: no average (N/A), not "everything ÷ the period".
+        if awakeH != nil, (unknownH ?? 0) <= 0.01 { return nil }
+        if awakeH != nil, let unknownH, unknownH > 0 { return whole / unknownH }   // only old summaries: as before
+        return fallbackHours > 0 && whole > 0 ? whole / fallbackHours : nil
+    }
+
+    /// The explanation of a row. "Other hardware" also names the parts macOS doesn't log separately on this
+    /// Mac (no display, memory or chip-part values), because their energy is then in it.
+    func help(_ id: String) -> String {
+        let base = Self.help[id] ?? ""
+        guard id == "other" else { return base }
+        var inside: [String] = []
+        if display == nil { inside.append("display") }
+        if memory == nil { inside.append("memory") }
+        if chip == nil, cpu != nil { inside.append("rest of the chip") }
+        guard !inside.isEmpty else { return base }
+        let list = inside.count == 1 ? inside[0] : inside.dropLast().joined(separator: ", ") + " and " + inside.last!
+        return "Incl. \(list) (macOS doesn't log them separately on this Mac). " + base
+    }
+
     static let help: [String: String] = [
         "display": "Screen backlight",
-        "apps": "Processor energy of the apps and services you run (the table below)",
-        "system": "Processor energy of macOS's own processes (WindowServer, kernel, system services) = CPU − your apps",
+        "apps": "Processor energy of the user apps and services you run (the table below)",
+        "system": "Processor energy of the system processes, macOS's own (WindowServer, kernel, system services) = CPU − user apps/services",
         "gpu": "Graphics processor",
         "memory": "Memory (DRAM)",
         "chip": "Rest of the chip besides the processor cores: memory controller, Neural Engine, media engines, interconnect",
         "other": "SSD, Wi-Fi, Bluetooth, ports, keyboard light, power supply losses = whole Mac − chip − display",
+        "sleep": "Whole Mac while asleep, incl. short wake-ups: measured by macOS's power counter, which keeps running in sleep",
     ]
 }
 
@@ -180,8 +215,11 @@ struct BreakdownStrip: View {
             ForEach(Array(parts.enumerated()), id: \.element.id) { i, p in
                 HStack(spacing: 8) {
                     Image(systemName: p.icon).foregroundStyle(p.color).frame(width: 18)
-                    Text(p.name).frame(width: 230, alignment: .leading).lineLimit(1)
-                    Text(Breakdown.help[p.id] ?? "").font(.caption).foregroundStyle(.secondary)
+                    // Only the name has a tooltip (the full explanation); normal colour here (blue only in tables and hints).
+                    Text(p.name).lineLimit(1)
+                        .tip(breakdown.help(p.id))
+                        .frame(width: 230, alignment: .leading)
+                    Text(breakdown.help(p.id)).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
                     Capsule().fill(p.color.gradient)
                         .frame(width: max(2, 120 * p.value / top), height: 6)
@@ -190,21 +228,27 @@ struct BreakdownStrip: View {
                         .foregroundStyle(.secondary).monospacedDigit().frame(width: 40, alignment: .trailing)
                     Text("\(fmt(p.value)) \(unit)").monospacedDigit().fontWeight(.semibold)
                         .frame(width: 90, alignment: .trailing)
-                    if let hours, hours > 0, unit == "Wh" {
-                        Text("avg \((p.value / hours).formatted(.number.precision(.fractionLength(2)))) W")
+                    if unit == "Wh", hours != nil || breakdown.awakeH != nil {   // same column in every row
+                        Text(avgHours(p.id).flatMap { h in h > 0 ? "avg \((p.value / h).formatted(.number.precision(.fractionLength(2)))) W" : nil } ?? "")
                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                             .frame(width: 80, alignment: .trailing)
                     }
                 }
-                .help(Breakdown.help[p.id] ?? "")
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
     }
 
+    /// Sleep: per hour asleep; everything else: per hour awake (or the whole period for old summaries).
+    private func avgHours(_ id: String) -> Double? {
+        // The parts also hold the energy of days without sleep data, so their hours count here too.
+        id == "sleep" ? breakdown.sleepH : breakdown.awakeH.map { $0 + (breakdown.unknownH ?? 0) } ?? hours
+    }
+
+    /// History (Wh): always one decimal, so all rows line up; live (W): two below 10 W.
     private func fmt(_ v: Double) -> String {
-        v.formatted(.number.precision(.fractionLength(v < 10 ? 2 : 1)))
+        v.formatted(.number.precision(.fractionLength(unit == "Wh" || v >= 10 ? 1 : 2)))
     }
 
     /// Whole-number percentages that add up to the rounded total (100 when the parts make up the whole):
@@ -256,6 +300,7 @@ struct InfoNote: View {
                 Label("How these numbers are measured", systemImage: "info.circle").font(.caption)
             }
             .buttonStyle(.link)
+            .help("Click to see where these numbers come from and how they are calculated")
             Spacer()
             VersionLink().font(.caption)
             SupportLink().font(.caption).padding(.leading, 12)
@@ -332,13 +377,18 @@ enum Explanations {
             "Whole Mac: the system load macOS logs about every minute. Only time while the Mac is awake counts.",
             "Display: screen-on time × average backlight power, worked out per day. This part is an estimate.",
             "Other hardware: whole Mac − chip − display (SSD, Wi-Fi, ports, keyboard light, power-supply losses).",
+            "Sleep: macOS's whole-Mac power counter keeps running while the Mac sleeps, so the energy of each sleep (including short wake-ups for background tasks) is measured. A sleep of 30 minutes or more on battery is measured from the battery's own charge before and after (mAh × volts), because on some Macs the counter counts too little while asleep. Where neither works (e.g. the counter restarted after a shutdown), an estimate from this Mac's other sleeps is used. Switched off counts as 0.",
         ]),
-        InfoSection(title: "Your apps and macOS", points: [
+        InfoSection(title: "User apps/services and system processes", points: [
             "The table lists the apps and services you run. Their energy is processor + graphics, as recorded by macOS.",
-            "macOS's own processes (WindowServer, kernel, system services) are counted in \"CPU · macOS system processes\".",
+            "So the table can add up to more than \"CPU · user apps/services\", which is processor only; the apps' graphics energy is in the GPU row.",
+            "Share = an app's energy ÷ the whole Mac's energy in the period, as in Live.",
+            "macOS's own processes (WindowServer, kernel, system services) are counted in \"CPU · system processes\".",
         ]),
         InfoSection(title: "Times", points: [
-            "Avg. W = energy ÷ running time. Running time counts only while the Mac is awake.",
+            "Avg. power = the whole Mac's energy while awake ÷ the time awake. A sleep lasts from closing the lid (or idle sleep) until you wake the Mac, taken from macOS's sleep log (pmset, about a week); short background wake-ups in between (Power Nap, network, a moment's wake when the charger is plugged in) count as sleep, exactly as in \"Sleep only\". Time without whole-Mac records that the sleep log doesn't show as sleep counts as awake; a restart in between counts as switched off. For days older than the sleep log, the time without whole-Mac records counts as sleep.",
+            "The breakdown's \"avg\" values are per hour awake; Sleep's is per hour asleep.",
+            "Avg. power in the table = energy ÷ running time. Running time counts only while the Mac is awake.",
             "CPU time is added up over all processor cores, so it can be longer than the period.",
             "Screen time per app comes from Mac Energy Monitor's own record of the app in front (macOS's log for times the app wasn't running).",
         ]),
@@ -349,18 +399,43 @@ enum Explanations {
         ]),
     ]
 
+    static let sleep: [InfoSection] = [
+        InfoSection(title: "What counts as a sleep", points: [
+            "From the moment the Mac goes to sleep (lid closed, idle, Apple menu) until you wake it. Short wake-ups in the background in between belong to the sleep.",
+            "Sleep times, wake-ups and their reasons come from macOS's sleep log (pmset), which keeps about a week. Older periods show only what's still there.",
+        ]),
+        InfoSection(title: "Energy", points: [
+            "macOS's whole-Mac power counter keeps running while the Mac sleeps, so each sleep's energy is measured, including its wake-ups. A sleep of 30 minutes or more on battery is measured from the battery's own charge before and after (some Macs' counter counts too little while asleep); the same rule is used in the history's Sleep row.",
+            "A sleep is marked with a blue ⚠ when its average power is more than twice this Mac's usual sleep power (median of its sleeps of 30 minutes or more, separately on battery and on the charger).",
+            "The Power and Minimum energy filters apply to the Sleeps tab.",
+        ]),
+        InfoSection(title: "Wake-ups", points: [
+            "Grouped by macOS's reason: you (lid, keyboard, trackpad), Wi-Fi or Bluetooth (network activity and nearby devices, which macOS reports together), a timer set by macOS (Power Nap, maintenance), the power adapter, other.",
+            "\"Planned\" is the wake macOS had scheduled for that moment and what asked for it.",
+            "macOS's technical names (processes, wake reasons, settings) are shown in plain words. Hover over a blue name to see the original.",
+        ]),
+        InfoSection(title: "Didn't sleep", points: [
+            "The lid was closed for more than 10 minutes, or the display was off for more than 30 minutes, and the Mac stayed awake (above sleep-level power).",
+            "\"Kept awake by\" lists the apps and services that held a sleep blocker (a power assertion) during that time. macOS's own power management is shown last.",
+        ]),
+        InfoSection(title: "Hints", points: [
+            "Based on this period's numbers and this Mac's sleep settings (pmset), read only. Mac Energy Monitor never changes settings.",
+        ]),
+    ]
+
     static let live: [InfoSection] = [
         InfoSection(title: "How often", points: [
             "At the update interval you choose (1–10 seconds), without admin rights.",
             "The table shows each app's power averaged over the last few seconds, so the list stays steady.",
         ]),
         InfoSection(title: "Where the numbers come from", points: [
-            "Your apps: each app's processor energy from macOS's per-process counters. An app's graphics energy is in the GPU row.",
+            "User apps/services: each app's processor energy from macOS's per-process counters. An app's graphics energy is in the GPU row.",
             "CPU, GPU, memory and the other chip parts: the chip's own energy counters (method from the open-source tool macmon, MIT licence).",
             "Display and whole Mac: sensors of the Mac's system management controller.",
         ]),
         InfoSection(title: "Calculated parts", points: [
-            "CPU · macOS system processes = CPU − your apps. macOS's own processes can only be read one by one with admin rights.",
+            "CPU · system processes = CPU − user apps/services. macOS's own processes can only be read one by one with admin rights.",
+            "Share = an app's power ÷ the whole Mac's power.",
             "Other hardware = whole Mac − chip − display.",
         ]),
     ]

@@ -105,7 +105,7 @@ enum GapTests {
         let r = try! fresh().fullReport(from: date(2026, 3, 10), to: date(2026, 3, 15))
         check(keys(r.missingDays) == ["2026-03-12", "2026-03-13", "2026-03-14"], "damaged days flagged: \(keys(r.missingDays))")
         near(r.hardware.total, 210, "whole Mac from the good days only")
-        near(r.coveredHours, 48, "covered hours")
+        near(r.coveredHours, 48, "covered hours (up to 3 min less: time with data starts at the first logged value)", tol: 0.05)
         check(r.hardware.whole.isFinite, "no NaN")
     }
 
@@ -139,23 +139,29 @@ enum GapTests {
     static func partlyCovered(_ dir: URL) {
         print("- partly covered saved days (with real macOS logs)")
         clear(dir)
-        let ls = date(2026, 11, 5, 12)
+        // Days relative to macOS's current logs (it deletes old ones): D = the first day after the logs' first day
+        // that has whole-Mac data, P = the day before it. The logs are pretended to start at noon on D.
         let log = fresh()
-        guard let range = try? log.availableRange(), range.lowerBound < date(2026, 11, 5) else {
-            check(false, "real macOS logs don't reach 5 Nov"); return
+        guard let range = try? log.availableRange() else { check(false, "no macOS logs"); return }
+        var dDay = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: range.lowerBound))!
+        while ((try? log.report(from: dDay, to: cal.date(byAdding: .day, value: 1, to: dDay)!))?.hardware.total ?? 0) <= 0 {
+            dDay = cal.date(byAdding: .day, value: 1, to: dDay)!
+            if dDay > Date() { check(false, "no day with whole-Mac data in macOS's logs"); return }
         }
-        let real = try! log.report(from: ls, to: date(2026, 11, 6))
-        let logsHave5 = real.dataDays.contains("2026-11-05")
-        write([day(date(2026, 11, 4), 400), day(date(2026, 11, 5), 1000)], dir)
-        var r = try! fresh().fullReport(from: date(2026, 11, 4), to: date(2026, 11, 6), pretendLogStart: ls)
+        let pDay = cal.date(byAdding: .day, value: -1, to: dDay)!, nDay = cal.date(byAdding: .day, value: 1, to: dDay)!
+        let ls = dDay.addingTimeInterval(12 * 3600)
+        let real = try! log.report(from: ls, to: nDay)
+        let logsHaveD = real.dataDays.contains(dayKey(dDay))
+        write([day(pDay, 400), day(dDay, 1000)], dir)
+        var r = try! fresh().fullReport(from: pDay, to: nDay, pretendLogStart: ls)
         check(r.missingDays.isEmpty, "nothing missing: \(keys(r.missingDays))")
-        near(r.hardware.total, 400 + (logsHave5 ? 500 : 1000) + (real.hardware.total ?? 0),
-             "whole Mac = 4 Nov + morning of 5 Nov (saved) + afternoon (logs)")
-        near(r.coveredHours, 48, "covered hours")
-        try! FileManager.default.removeItem(at: dir.appendingPathComponent("2026-11-04.json"))
-        r = try! fresh().fullReport(from: date(2026, 11, 4), to: date(2026, 11, 6), pretendLogStart: ls)
-        check(keys(r.missingDays) == ["2026-11-04"], "4 Nov (before the logs, not saved) flagged: \(keys(r.missingDays))")
-        check(!keys(r.missingDays).contains("2026-11-05"), "the logs' first day is never flagged")
+        near(r.hardware.total, 400 + (logsHaveD ? 500 : 1000) + (real.hardware.total ?? 0),
+             "whole Mac = day before + morning of D (saved) + afternoon (logs)")
+        near(r.coveredHours, 48, "covered hours (up to 3 min less: time with data starts at the first logged value)", tol: 0.05)
+        try! FileManager.default.removeItem(at: dir.appendingPathComponent(dayKey(pDay) + ".json"))
+        r = try! fresh().fullReport(from: pDay, to: nDay, pretendLogStart: ls)
+        check(keys(r.missingDays) == [dayKey(pDay)], "the day before the logs, not saved, flagged: \(keys(r.missingDays))")
+        check(!keys(r.missingDays).contains(dayKey(dDay)), "the logs' first day is never flagged")
     }
 
     /// The app didn't run for 15 days (last saved day 29 Oct), then starts: it saves only days macOS still has.
@@ -179,7 +185,16 @@ enum GapTests {
                 if !saved.contains(dayKey(d)) { out.append(dayKey(d)) }
                 d = next
             }
-            return out
+            // Since 1.1.5 also finished days inside macOS's log range that have no whole-Mac data in the logs
+            // (a day's log file is missing) and no saved summary.
+            while let next = cal.date(byAdding: .day, value: 1, to: d), next <= now {
+                if !saved.contains(dayKey(d)), !logHasData(d, next) { out.append(dayKey(d)) }
+                d = next
+            }
+            return out.sorted()
+        }
+        func logHasData(_ a: Date, _ b: Date) -> Bool {
+            ((try? PowerLog().report(from: a, to: b))?.hardware.total ?? 0) > 0
         }
 
         // a) real macOS log range; two summaries from an older app version: one inside macOS's logs, one before
@@ -208,8 +223,9 @@ enum GapTests {
         print("    saved \(added.count) days from macOS's logs (\(added.sorted().first ?? "-") … \(added.sorted().last ?? "-"))")
         let exp = expectedMissing(range.lowerBound, saved: Set(log.archive.days.map(\.day)))
         check(keys(r.missingDays) == exp, "flagged \(keys(r.missingDays)), expected \(exp)")
-        check(r.missingDays.allSatisfy { cal.date(byAdding: .day, value: 1, to: $0)! <= range.lowerBound },
-              "no day inside macOS's log range is flagged")
+        check(r.missingDays.allSatisfy { cal.date(byAdding: .day, value: 1, to: $0)! <= range.lowerBound
+                                         || !logHasData($0, cal.date(byAdding: .day, value: 1, to: $0)!) },
+              "a day inside macOS's log range is flagged only if the logs have no whole-Mac data for it")
 
         // b) pretend macOS only has logs from 8 Nov 10:00 (8 Nov starts too late to be saved whole)
         clear(dir); write(oldDays(), dir)
@@ -223,7 +239,8 @@ enum GapTests {
         r = try! log2.fullReport(from: from, to: now, pretendLogStart: pls)
         let exp2 = expectedMissing(pls, saved: Set(log2.archive.days.map(\.day)))
         check(keys(r.missingDays) == exp2, "pretend: flagged \(keys(r.missingDays)), expected \(exp2)")
-        check(!keys(r.missingDays).contains("2026-11-08"), "pretend: first log day trusted")
+        check(!keys(r.missingDays).contains("2026-11-08") || !logHasData(date(2026, 11, 8, 0), date(2026, 11, 9, 0)),
+              "pretend: first log day trusted (when the logs have data for it)")
     }
 
     // MARK: time-zone change (two runs)

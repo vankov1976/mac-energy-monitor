@@ -55,6 +55,7 @@ final class LiveBreakdown: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: LiveSettings.shared.interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        timer?.tolerance = LiveSettings.shared.interval * 0.1   // lets macOS group wake-ups (values use the real elapsed time)
     }
 
     /// New interval chosen: restart the timer if sampling is running.
@@ -199,9 +200,12 @@ final class ProcessSampler: @unchecked Sendable {   // only used on LiveBreakdow
 
     private var last: [pid_t: UInt64] = [:]
     private var lastTime: Date?
-    private var info: [pid_t: Info] = [:]
+    /// What doesn't change while a process runs: executable path, start time, coalition.
+    private struct Proc { let path: String; let start: Double?; let coalition: UInt64? }
+    private var procs: [pid_t: Proc] = [:]
+    private var infoByPath: [String: Info] = [:]
 
-    func reset() { last = [:]; lastTime = nil; info = [:] }
+    func reset() { last = [:]; lastTime = nil; procs = [:]; infoByPath = [:] }
 
     func sample() -> Result {
         let now = Date()
@@ -210,18 +214,41 @@ final class ProcessSampler: @unchecked Sendable {   // only used on LiveBreakdow
         for pid in Self.allPids() where pid > 0 {
             if let e = Self.energy(pid) { current[pid] = e; r.readable += 1 } else { r.unreadable += 1 }
         }
-        defer { last = current; lastTime = now; info = info.filter { current[$0.key] != nil } }
+        defer { last = current; lastTime = now; procs = procs.filter { current[$0.key] != nil } }
         guard let t0 = lastTime else { return r }
         let dt = now.timeIntervalSince(t0)
         guard dt > 0.2 else { return r }
 
+        // Group like macOS's power log (and so like the history views): by coalition, the group of processes
+        // an app started (helpers, XPC services, command-line tools such as Claude Code's). The group is named
+        // after its app that started first, e.g. Claude, not the Claude Code it launched.
+        for pid in current.keys where procs[pid] == nil { procs[pid] = Self.proc(pid) }
+        var leaders: [UInt64: (start: Double, path: String)] = [:]
+        for p in procs.values where p.path.contains(".app/") {
+            guard let c = p.coalition, let st = p.start else { continue }
+            if let l = leaders[c], l.start <= st { continue }
+            leaders[c] = (st, p.path)
+        }
+
         var byGroup: [String: (Info, Double)] = [:]
         for (pid, e) in current {
-            guard let e0 = last[pid], e >= e0 else { continue }   // new process: baseline only
+            // A process started since the last reading: its counter began at 0, so all of it falls in this interval.
+            // (One that existed before but couldn't be read then has no known start value: baseline only.)
+            let e0: UInt64
+            if let l = last[pid] { e0 = l }
+            else if let born = Self.startTime(pid), born >= t0.timeIntervalSince1970 { e0 = 0 }
+            else { continue }
+            guard e >= e0 else { continue }
             let w = Double(e - e0) / 1e9 / dt
             guard w > 0 else { continue }
-            let i = info[pid] ?? describe(pid)
-            info[pid] = i
+            let p = procs[pid]
+            // Without a coalition app: the app macOS holds responsible (e.g. Safari for its web pages, which run
+            // from WebKit's folder), else the process's own path.
+            let resp = Self.responsible(pid).map(Self.path) ?? ""
+            let path = p?.coalition.flatMap { leaders[$0]?.path }
+                ?? (resp.contains(".app/") ? resp : (p?.path ?? Self.path(pid)))
+            let i = infoByPath[path] ?? describe(path, pid)
+            if path.contains(".app/") { infoByPath[path] = i }     // names of plain tools come from the pid
             byGroup[i.id, default: (i, 0)].1 += w
         }
         r.groups = byGroup.values.map { LiveRow(id: $0.0.id, name: $0.0.name, kind: $0.0.kind,
@@ -230,15 +257,15 @@ final class ProcessSampler: @unchecked Sendable {   // only used on LiveBreakdow
         return r
     }
 
-    /// Groups helpers with their app: the outermost ".app" in the executable's path.
-    private func describe(_ pid: pid_t) -> Info {
-        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        let path = proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 ? String(cString: buf) : ""
+    /// The row for a group: the outermost ".app" in `path` (the group's app), else the tool itself.
+    private func describe(_ path: String, _ pid: pid_t) -> Info {
         if let r = path.range(of: ".app/") {
             let app = String(path[..<r.lowerBound]) + ".app"
             let name = FileManager.default.displayName(atPath: app).replacingOccurrences(of: ".app", with: "")
-            // Apps you open (also Apple's in /System/Applications) vs. macOS's own helper apps.
-            let mine = !app.hasPrefix("/System/") || app.hasPrefix("/System/Applications/")
+            // Apps you open (also Apple's in /System/Applications, and Safari, which runs from
+            // /System/Volumes/Preboot/Cryptexes/App/System/Applications) vs. macOS's own helper apps.
+            let rel = app.hasPrefix(Self.cryptex) ? String(app.dropFirst(Self.cryptex.count)) : app
+            let mine = !rel.hasPrefix("/System/") || rel.hasPrefix("/System/Applications/")
             return Info(id: app, name: name, kind: mine ? "App" : "System", appPath: app)
         }
         var nb = [CChar](repeating: 0, count: 256)
@@ -248,6 +275,46 @@ final class ProcessSampler: @unchecked Sendable {   // only used on LiveBreakdow
             || path.hasPrefix("/sbin/") || path.isEmpty
         return Info(id: path.isEmpty ? "pid:\(name)" : path, name: name.isEmpty ? "pid \(pid)" : name,
                     kind: system ? "System" : "Background", appPath: nil)
+    }
+
+    private static func proc(_ pid: pid_t) -> Proc {
+        Proc(path: path(pid), start: startTime(pid), coalition: coalition(pid))
+    }
+
+    /// The process's resource coalition (PROC_PIDCOALITIONINFO = 20 in the kernel's proc_info.h; not in the
+    /// public SDK headers): the same grouping macOS's power log uses for its per-app energy.
+    private static func coalition(_ pid: pid_t) -> UInt64? {
+        var ids = [UInt64](repeating: 0, count: 5)          // coalition_id[2] (resource, jetsam) + 3 reserved
+        let n = ids.withUnsafeMutableBytes { proc_pidinfo(pid, 20, 0, $0.baseAddress, 40) }
+        return n == 40 && ids[0] != 0 ? ids[0] : nil
+    }
+
+    /// When the process started (Unix seconds), or nil if it can't be read.
+    private static func startTime(_ pid: pid_t) -> Double? {
+        var bi = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bi, size) == size else { return nil }
+        return Double(bi.pbi_start_tvsec) + Double(bi.pbi_start_tvusec) / 1e6
+    }
+
+    private static let cryptex = "/System/Volumes/Preboot/Cryptexes/App"
+
+    private static func path(_ pid: pid_t) -> String {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        return proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 ? String(cString: buf) : ""
+    }
+
+    /// The process macOS holds responsible for `pid` (what Activity Monitor groups by), if another one.
+    /// The function is not in the public headers, so it is looked up at run time; missing → no grouping.
+    private static let responsibleFn: (@convention(c) (pid_t) -> pid_t)? = {
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid") else { return nil }
+        return unsafeBitCast(sym, to: (@convention(c) (pid_t) -> pid_t).self)
+    }()
+
+    private static func responsible(_ pid: pid_t) -> pid_t? {
+        guard let f = responsibleFn else { return nil }
+        let r = f(pid)
+        return r > 0 && r != pid ? r : nil
     }
 
     private static func allPids() -> [pid_t] {
@@ -305,7 +372,7 @@ struct LiveTableView: View {
         VStack(alignment: .leading, spacing: 8) {
             BreakdownStrip(breakdown: live.breakdown, unit: "W")
             HStack {
-                Text("Your apps and services · live").font(.headline)
+                Text("User apps/services · live").font(.headline)
                 Picker("Type", selection: $kind) {
                     ForEach(["All", "App", "Background"], id: \.self) { Text($0) }
                 }.frame(width: 170).padding(.leading, 12)
@@ -343,7 +410,7 @@ struct LiveTableView: View {
 
     private var header: some View {
         HStack(spacing: 0) {
-            headerCell("App / service", .name, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
+            headerCell("User app/service", .name, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
             headerCell("Type", .kind, alignment: .leading).frame(width: Self.typeW, alignment: .leading)
             headerCell("Share of whole Mac", .share, alignment: .leading).frame(width: Self.shareW, alignment: .leading)
             headerCell("Power now (W)", .watts, alignment: .trailing).frame(width: Self.powerW, alignment: .trailing)
@@ -379,7 +446,6 @@ struct LiveTableView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .help(r.name + "\n" + r.id)
             Text(r.kind).foregroundStyle(.secondary).lineLimit(1).frame(width: Self.typeW, alignment: .leading)
             HStack(spacing: 6) {
                 Capsule().fill(.tint).frame(width: max(2, min(60, r.share * 3)), height: 5)

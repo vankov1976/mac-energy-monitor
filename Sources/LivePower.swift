@@ -26,6 +26,7 @@ final class LivePower: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: LiveSettings.shared.interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        timer?.tolerance = LiveSettings.shared.interval * 0.1   // lets macOS group wake-ups (values use the real elapsed time)
     }
 
     private func tick() {

@@ -9,9 +9,10 @@ struct DaySummary: Codable {
     var screenOnH: Double
     var hardware: Breakdown      // Wh for the day
     var savedAt: Double
-    /// How the summary was computed: 2 = per-day display estimate (Nov 2026). Older files have none (= 1).
+    /// How the summary was computed: 2 = per-day display estimate (Nov 2026), 3–9 = awake/sleep time and
+    /// sleep energy, running time counted once (1.1.5). Older files have none (= 1).
     var version: Int? = DaySummary.currentVersion
-    static let currentVersion = 2
+    static let currentVersion = 14   // 14: memory / chip parts not logged = unknown, not 0; 11: brief full wakes inside a sleep, pmset restarts = off; 12: logged-awake gaps; 13: re-save days saved in another time zone by tests
 }
 
 /// Keeps a small JSON file per day in ~/Library/Application Support/MacEnergyMonitor/Daily
@@ -35,12 +36,32 @@ final class DailyArchive: @unchecked Sendable {
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
+    /// A summary's name is its Gregorian date, within a day of its start (whatever time zone it was saved in).
+    /// Copies named in another calendar ("1448-05-22", from an older version) would otherwise count twice.
+    static func isGregorianName(_ s: DaySummary) -> Bool {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian); f.timeZone = TimeZone(identifier: "UTC")
+        f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        guard let d = f.date(from: s.day) else { return false }
+        return abs(d.timeIntervalSince1970 - s.start) < 36 * 3600
+    }
+
     var days: [DaySummary] {
         if cache == nil {
             var c: [String: DaySummary] = [:]
             for f in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where f.hasSuffix(".json") {
                 if let d = try? Data(contentsOf: dir.appendingPathComponent(f)),
-                   let s = try? JSONDecoder().decode(DaySummary.self, from: d) { c[s.day] = s }
+                   var s = try? JSONDecoder().decode(DaySummary.self, from: d),
+                   // Only files named like dayKey (Gregorian): a copy of the same day saved under another
+                   // calendar's name (e.g. "1448-05-22") would otherwise be counted twice.
+                   Self.isGregorianName(s) {
+                    // Saved before version 14 on a Mac that logs no memory / chip-part values: stored as 0, not unknown.
+                    if (s.version ?? 1) < 14, s.hardware.memory == 0 {
+                        s.hardware.memory = nil
+                        if let ch = s.hardware.chip, ch <= (s.hardware.cpu ?? 0) + (s.hardware.gpu ?? 0) + 1e-6 { s.hardware.chip = nil }
+                    }
+                    c[s.day] = s
+                }
             }
             cache = c
         }
@@ -56,7 +77,7 @@ final class DailyArchive: @unchecked Sendable {
         var saved: [String: Int] = [:]
         for d in days { saved[d.day] = d.version ?? 1 }
         let df = DateFormatter()
-        df.calendar = cal; df.timeZone = cal.timeZone; df.locale = Locale(identifier: "en_US_POSIX")
+        df.calendar = Calendar(identifier: .gregorian); df.timeZone = cal.timeZone; df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd"
         var dayStart = cal.startOfDay(for: logRange.lowerBound)
         while true {
@@ -85,14 +106,28 @@ extension Breakdown {
     /// Sum of two breakdowns (a part is missing only if it is missing in both).
     static func + (a: Breakdown, b: Breakdown) -> Breakdown {
         func add(_ x: Double?, _ y: Double?) -> Double? { x == nil && y == nil ? nil : (x ?? 0) + (y ?? 0) }
-        return Breakdown(display: add(a.display, b.display), cpu: add(a.cpu, b.cpu), apps: a.apps + b.apps,
-                         gpu: add(a.gpu, b.gpu), memory: add(a.memory, b.memory), chip: add(a.chip, b.chip),
-                         total: add(a.total, b.total))
+        // Awake/asleep hours are only known if known for both (else averages fall back to the whole period).
+        func both(_ x: Double?, _ y: Double?) -> Double? { x.flatMap { x in y.map { x + $0 } } }
+        var r = Breakdown(display: add(a.display, b.display), cpu: add(a.cpu, b.cpu), apps: a.apps + b.apps,
+                          gpu: add(a.gpu, b.gpu), memory: add(a.memory, b.memory), chip: add(a.chip, b.chip),
+                          total: add(a.total, b.total))
+        r.sleep = add(a.sleep, b.sleep)
+        r.sleepEstimated = (a.sleepEstimated ?? false) || (b.sleepEstimated ?? false) ? true : nil
+        r.awakeH = both(a.awakeH, b.awakeH)
+        r.sleepH = both(a.sleepH, b.sleepH)
+        r.offH = add(a.offH, b.offH)
+        r.unknownH = add(a.unknownH, b.unknownH)
+        r.unknownWh = add(a.unknownWh, b.unknownWh)
+        return r
     }
 
     func scaled(_ k: Double) -> Breakdown {
-        Breakdown(display: display.map { $0 * k }, cpu: cpu.map { $0 * k }, apps: apps * k, gpu: gpu.map { $0 * k },
-                  memory: memory.map { $0 * k }, chip: chip.map { $0 * k }, total: total.map { $0 * k })
+        var r = Breakdown(display: display.map { $0 * k }, cpu: cpu.map { $0 * k }, apps: apps * k, gpu: gpu.map { $0 * k },
+                          memory: memory.map { $0 * k }, chip: chip.map { $0 * k }, total: total.map { $0 * k })
+        r.sleep = sleep.map { $0 * k }; r.sleepEstimated = sleepEstimated
+        r.awakeH = awakeH.map { $0 * k }; r.sleepH = sleepH.map { $0 * k }; r.offH = offH.map { $0 * k }
+        r.unknownH = unknownH.map { $0 * k }; r.unknownWh = unknownWh.map { $0 * k }
+        return r
     }
 }
 
@@ -107,7 +142,7 @@ extension PowerLog {
         // macOS's logs for the part of the period they reach. macOS doesn't always delete its archives
         // oldest-first, so a day inside that range can be missing from them too.
         var rows: [String: AppRow] = [:]
-        var hw = Breakdown(), screenH = 0.0
+        var hw: Breakdown?, screenH = 0.0
         var estimatedFrom: Date?
         var dataDays = Set<String>()
         if to > logStart || from >= logStart {
@@ -124,16 +159,33 @@ extension PowerLog {
         // only the part before their start comes from the saved summary.
         let a = from.timeIntervalSince1970, z = to.timeIntervalSince1970, ls = logStart.timeIntervalSince1970
         for d in archive.days {
-            let upTo = dataDays.contains(d.day) ? min(d.end, ls) : d.end
+            // Days the logs have count from the logs. A summary saved in another time zone (e.g. while travelling)
+            // spans two local days: if the logs have either of them, only its part before the logs' start counts.
+            let inLogs = dataDays.contains(d.day) || dataDays.contains(dayKey(Date(timeIntervalSince1970: d.start)))
+                || dataDays.contains(dayKey(Date(timeIntervalSince1970: d.end - 1)))
+            let upTo = inLogs ? min(d.end, ls) : d.end
             let k = max(0, min(upTo, z) - max(d.start, a)) / (d.end - d.start)
             guard k > 0 else { continue }
-            hw = hw + d.hardware.scaled(k)
+            #if DIAGNOSTICS
+            if ProcessInfo.processInfo.environment["MEM_SHOW_DAYS"] != nil {
+                print("summary used:", d.day, String(format: "k %.3f", k), "inLogs", dataDays.contains(d.day), "logStart", logStart,
+                      "dataDays", dataDays.sorted().joined(separator: ","))
+            }
+            #endif
+            var dh = d.hardware.scaled(k)
+            if dh.awakeH == nil {          // saved before 1.1.5: not known when the Mac slept
+                dh.awakeH = 0; dh.sleepH = 0
+                dh.unknownH = (d.end - d.start) * k / 3600; dh.unknownWh = dh.whole
+            }
+            hw = hw.map { $0 + dh } ?? dh
             screenH += d.screenOnH * k
             for r in d.rows { rows[r.id] = Self.merge(rows[r.id], r, k) }
             dataDays.insert(d.day)
         }
         var list = Array(rows.values)
-        let total = max(list.reduce(0) { $0 + $1.energyWh }, 1e-9)
+        // Share = part of the whole Mac's energy (as in Live); without whole-Mac data, part of all apps' energy.
+        let hwAll = hw ?? Breakdown()
+        let total = hwAll.whole > 0 ? hwAll.whole : max(list.reduce(0) { $0 + $1.energyWh }, 1e-9)
         for i in list.indices {
             list[i].share = 100 * list[i].energyWh / total
             list[i].avgW = list[i].runningH > 0.01 ? list[i].energyWh / list[i].runningH : -1
@@ -141,8 +193,13 @@ extension PowerLog {
         list.sort { $0.energyWh > $1.energyWh }
         let totals = Totals(energyWh: list.reduce(0) { $0 + $1.energyWh }, screenOnH: screenH,
                             hours: to.timeIntervalSince(from) / 3600)
-        return withCoverage(Report(start: from, end: to, rows: list, totals: totals, hardware: hw,
-                                   estimatedFrom: estimatedFrom, dataDays: dataDays), logStart: logStart)
+        var r = withCoverage(Report(start: from, end: to, rows: list, totals: totals, hardware: hwAll,
+                                    estimatedFrom: estimatedFrom, dataDays: dataDays), logStart: logStart)
+        // Time with data = awake + asleep where both are known (this leaves out holes in macOS's log too).
+        if let a = hwAll.awakeH, let s = hwAll.sleepH {          // also 0 when nothing is logged yet
+            r.coveredHours = min(r.coveredHours, a + s + (hwAll.offH ?? 0) + (hwAll.unknownH ?? 0))
+        }
+        return r
     }
 
     /// Fills in the days of the period missing from the app's own history: days *before* macOS's logs
@@ -164,8 +221,16 @@ extension PowerLog {
         var day = cal.startOfDay(for: r.start)
         var missingSecs = 0.0
         while day < r.end, let next = cal.date(byAdding: .day, value: 1, to: day) {
-            // Days macOS's own logs cover (even partly) are trusted as they are.
-            if next <= logStart {
+            // Days macOS's own logs cover (even partly) are trusted as they are — if they have whole-Mac data.
+            // A day inside the logs' range without any (macOS's log for it is missing) has no data either.
+            // Today is never "no data": what's missing there is only what macOS hasn't logged yet.
+            if next > logStart, !r.dataDays.contains(dayKey(day)), next <= Date() {
+                let x = max(day, r.start).timeIntervalSince1970, y = min(next, r.end).timeIntervalSince1970
+                if y > x {
+                    missingSecs += y - x
+                    if y - x >= 3600 { r.missingDays.append(day) }
+                }
+            } else if next <= logStart {
                 let x = max(day, r.start).timeIntervalSince1970, y = min(next, r.end).timeIntervalSince1970
                 let gap = max(0, (y - x) - coveredSecs(x, y))
                 missingSecs += gap

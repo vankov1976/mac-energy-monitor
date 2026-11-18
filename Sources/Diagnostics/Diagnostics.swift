@@ -5,6 +5,10 @@ import Foundation
 /// They print their results and quit without starting the app.
 extension EnergyMonitorApp {
     static func runDiagnosticsIfAsked() {
+        // Test runs: read macOS's sleep log first, so history reports use it every time (reproducible).
+        // MEM_NO_PMSET=1: without it (as before the sleep log is read).
+        if CommandLine.arguments.contains(where: { $0.hasPrefix("--") && $0 != "--background" }),
+           ProcessInfo.processInfo.environment["MEM_NO_PMSET"] == nil { _ = PMSetLog.shared.events() }
         // `MacEnergyMonitor --selftest`: print the last 7 days and quit (used to check the build).
         if CommandLine.arguments.contains("--selftest") {
             do {
@@ -30,6 +34,7 @@ extension EnergyMonitorApp {
             exit(0)
         }
         GapTests.runIfAsked()
+        VerifyTests.runIfAsked()
         liveTestIfAsked()
         diagnosticsIfAsked()
     }
@@ -71,8 +76,9 @@ extension EnergyMonitorApp {
             var bad = 0, checked = 0
             for row in r.rows where row.kind != "System" {
                 let text = fmt(row.energyWh, row.energyWh < 10 ? 2 : 1)
-                let shown = Double(text.replacingOccurrences(of: "\u{2019}", with: "").replacingOccurrences(of: ".", with: "")
-                                       .replacingOccurrences(of: ",", with: ".")) ?? -1
+                // Read the text back in this Mac's own number format (comma or dot as decimal separator).
+                let nf = NumberFormatter(); nf.numberStyle = .decimal; nf.locale = .current
+                let shown = nf.number(from: text)?.doubleValue ?? -1
                 for t in [0.1, 1.0, 10.0] {
                     checked += 1
                     if (ContentView.shownEnergy(row.energyWh) >= t) != (shown >= t) {
