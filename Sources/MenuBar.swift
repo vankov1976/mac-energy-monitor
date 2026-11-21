@@ -80,6 +80,7 @@ struct MenuBarView: View {
                     Spacer(minLength: 4)
                     Toggle(BT.inMenuBar, isOn: $batteryInMenuBar).toggleStyle(.checkbox).fixedSize()
                         .controlSize(.small).help(BT.inMenuBarTip)
+                        .onChange(of: batteryInMenuBar) { NotificationCenter.default.post(name: StatusBarController.batteryToggled, object: nil) }
                 }
                 Spacer(minLength: 4)
                 StartAtLoginToggle().controlSize(.small).fixedSize()
@@ -337,15 +338,26 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         // left / until full, fixed width. The icon image is made only when the % or charging changes.
         let batW = Self.batteryIconSize.width + ("  " + Self.batteryTime(nil) as NSString).size(withAttributes: [.font: font]).width + 8
         let baseLength = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
+        toggledObserver = NotificationCenter.default.addObserver(forName: Self.batteryToggled, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.popover.isShown {                       // closes at once, without fading out
+                    self.popover.animates = false; self.popover.performClose(nil); self.popover.animates = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.model.systemW = self.model.systemW }   // resize + redraw now
+            }
+        }
         if bat.hasBattery { bat.startMenuBar() }
         watch = model.$systemW.sink { [weak self] w in
             guard let self else { return }
             // The battery can be switched off in the panel ("In menu bar").
-            let showBattery = bat.hasBattery && (UserDefaults.standard.object(forKey: Self.batteryKey) as? Bool ?? true)
-            let length = showBattery ? ceil(baseLength + batW) : baseLength
-            // While the panel is open its anchor (this item) keeps its width, so the panel doesn't jump; the new
-            // width applies when it closes.
+            let wantBattery = bat.hasBattery && (UserDefaults.standard.object(forKey: Self.batteryKey) as? Bool ?? true)
+            let length = wantBattery ? ceil(baseLength + batW) : baseLength
+            // macOS doesn't lay the item out again while the panel is open (and a wider item would move the panel),
+            // so "In menu bar" closes the panel first (batteryToggled) and the width changes right after.
             if self.item.length != length && !self.popover.isShown { self.item.length = length }
+            // The battery is drawn only when the item really has room for it (never over the watts).
+            let showBattery = wantBattery && self.item.length >= ceil(baseLength + batW)
             let text = " " + (w.map(Self.label) ?? "–– W")
             let out = NSMutableAttributedString(string: text, attributes: [.font: font])
             var key = text
@@ -385,6 +397,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     /// "transient" closing doesn't see).
     private var outsideClicks: Any?
     private var lastTitle = "", batteryImageKey = ""
+    static let batteryToggled = Notification.Name("menuBarBatteryToggled")
+    private var toggledObserver: Any?
     private let batteryAttachment = NSTextAttachment()
 
     static let batteryIconSize = NSSize(width: 34, height: 15)

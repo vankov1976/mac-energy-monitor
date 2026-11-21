@@ -607,7 +607,10 @@ final class PowerLog: @unchecked Sendable {
             let holeH = holes.reduce(0) { $0 + overlap($1.a, $1.b, lo, hi) } / 3600
             // Sleeps from pmset's log, each with the same energy rule as "Sleep only" (SleepEnergy.sessionWh),
             // so the Sleep row and "Sleep only" agree. Gaps outside them (before the log, switched off) as before.
-            let bat = SleepEnergy.battery(dbs, start - 86400, end + 3600)
+            // The battery log around the WHOLE sleeps, also where a sleep runs past the period's end: the energy of a
+            // sleep on battery is its whole charge drop, shared out by time (else a period ending mid-sleep loses it).
+            let bat = SleepEnergy.battery(dbs, min(start, sessions.map(\.a).min() ?? start) - 3600,
+                                          max(end, sessions.map(\.b).max() ?? end) + 3600)
             let ctr = SleepAnalysis.Counter(self, from: Date(timeIntervalSince1970: start - 86400),
                                             to: Date(timeIntervalSince1970: end + 3600))
             var sessWh = 0.0, sessKnown = false, sessSecs = 0.0
