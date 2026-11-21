@@ -64,10 +64,27 @@ final class MenuModel: ObservableObject {
 struct MenuBarView: View {
     @ObservedObject var model: MenuModel
     @ObservedObject var live = LiveBreakdown.shared
+    @AppStorage(StatusBarController.batteryKey) private var batteryInMenuBar = true
     var close: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Top row: the battery (as in the window; click opens the window's battery view) and Start at login.
+            HStack {
+                BatteryButton(isOn: Binding(get: { false }, set: { _ in
+                    close()
+                    BatteryModel.requestView()
+                    StatusBarController.showMainWindow()
+                }))
+                if BatteryModel.shared.hasBattery {
+                    Spacer(minLength: 4)
+                    Toggle(BT.inMenuBar, isOn: $batteryInMenuBar).toggleStyle(.checkbox).fixedSize()
+                        .controlSize(.small).help(BT.inMenuBarTip)
+                }
+                Spacer(minLength: 4)
+                StartAtLoginToggle().controlSize(.small).fixedSize()
+            }
+            Divider()
             // The two boxes, with the same space above (the panel's edge) and below (to the line): 14 pt.
             HStack(spacing: 10) {
                 statBox { Text("Whole Mac now").foregroundStyle(.secondary) } value: {
@@ -129,8 +146,6 @@ struct MenuBarView: View {
             if let e = model.error { Text(e).font(.caption).foregroundStyle(.red) }
             UpdateBanner(before: { close() })
             Divider()
-            StartAtLoginToggle()
-            Divider()
             HStack {
                 Button("Open Mac Energy Monitor") {
                     close()
@@ -146,7 +161,7 @@ struct MenuBarView: View {
             }
         }
         .padding(14)
-        .frame(width: 360)
+        .frame(width: 384)
     }
 
     /// One framed box: a caption line and a value line, both starting at the same left edge.
@@ -299,10 +314,14 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         if let b = item.button {
             b.image = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "Mac Energy Monitor")
             b.imagePosition = .imageLeading
+            b.alignment = .left        // fixed positions: a narrower text (e.g. the calculating dots) doesn't shift the rest
             b.target = self
             b.action = #selector(toggle)
         }
         popover.behavior = .transient
+        // No arrow (the small triangle pointing at the menu bar icon). Undocumented popover setting, used only if
+        // this macOS has it: otherwise the arrow simply stays.
+        if popover.responds(to: NSSelectorFromString("setShouldHideAnchor:")) { popover.setValue(true, forKey: "shouldHideAnchor") }
         popover.appearance = NSAppearance(named: .darkAqua)   // the menu bar panel is always dark
         popover.delegate = self
         popover.contentViewController = NSHostingController(rootView: MenuBarView(model: model, close: { [weak self] in
@@ -312,17 +331,97 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let sample = " " + Self.label(88.8)
         let textW = (sample as NSString).size(withAttributes: [.font: font]).width
-        item.length = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
+        // The battery after the watts (Macs with a battery): icon with % and the time left / until full, fixed width.
+        let bat = BatteryModel.shared
+        // The battery after the watts (Macs with a battery), in the same menu bar item: icon with % and the time
+        // left / until full, fixed width. The icon image is made only when the % or charging changes.
+        let batW = Self.batteryIconSize.width + ("  " + Self.batteryTime(nil) as NSString).size(withAttributes: [.font: font]).width + 8
+        let baseLength = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
+        if bat.hasBattery { bat.startMenuBar() }
         watch = model.$systemW.sink { [weak self] w in
+            guard let self else { return }
+            // The battery can be switched off in the panel ("In menu bar").
+            let showBattery = bat.hasBattery && (UserDefaults.standard.object(forKey: Self.batteryKey) as? Bool ?? true)
+            let length = showBattery ? ceil(baseLength + batW) : baseLength
+            // While the panel is open its anchor (this item) keeps its width, so the panel doesn't jump; the new
+            // width applies when it closes.
+            if self.item.length != length && !self.popover.isShown { self.item.length = length }
             let text = " " + (w.map(Self.label) ?? "–– W")
-            guard let self, text != self.lastTitle else { return }     // redraw the menu bar only when it changes
-            self.lastTitle = text
-            self.item.button?.attributedTitle = NSAttributedString(string: text, attributes: [.font: font])
+            let out = NSMutableAttributedString(string: text, attributes: [.font: font])
+            var key = text
+            if showBattery, let b = bat.now {
+                bat.menuBarTick()                                       // same rhythm as the watts
+                let level = b.level.rounded(), charging = b.onCharger && !b.fullyCharged || b.charging
+                let time = Self.batteryTime(b.onCharger ? bat.secondsToFull : bat.secondsLeft, animate: true)
+                key += "|\(level)|\(charging)|" + time
+                if self.batteryImageKey != "\(level)|\(charging)" {
+                    self.batteryImageKey = "\(level)|\(charging)"
+                    self.batteryAttachment.image = Self.batteryImage(level: level, charging: charging)
+                    self.batteryAttachment.bounds = CGRect(x: 0, y: -3, width: Self.batteryIconSize.width, height: Self.batteryIconSize.height)
+                }
+                out.append(NSAttributedString(string: "  ", attributes: [.font: font]))
+                out.append(NSAttributedString(attachment: self.batteryAttachment))
+                out.append(NSAttributedString(string: " " + time, attributes: [.font: font]))
+            }
+            guard key != self.lastTitle else { return }                // redraw the menu bar only when it changes
+            self.lastTitle = key
+            self.item.button?.attributedTitle = out
+            // VoiceOver can't read the battery picture: a spoken label for the whole item.
+            var spoken = "Mac Energy Monitor, " + text.trimmingCharacters(in: .whitespaces)
+            if showBattery, let b = bat.now {
+                let t = b.onCharger ? bat.secondsToFull.map(BT.untilFull) : bat.secondsLeft.map(BT.left)
+                spoken += ", " + String(localized: "battery \(BT.pct(b.level))") + (t.map { ", " + $0 } ?? "")
+            }
+            self.item.button?.setAccessibilityLabel(spoken)
         }
     }
 
-    func popoverDidClose(_ notification: Notification) { LiveBreakdown.shared.stop(); model.visible = false }
-    private var lastTitle = ""
+    func popoverDidClose(_ notification: Notification) {
+        LiveBreakdown.shared.stop(); model.visible = false
+        if let m = outsideClicks { NSEvent.removeMonitor(m); outsideClicks = nil }
+        lastTitle = ""                     // redraw (and apply a changed width) at the next update
+    }
+    /// Clicks outside the panel close it, also on an empty spot of the menu bar (which the popover's own
+    /// "transient" closing doesn't see).
+    private var outsideClicks: Any?
+    private var lastTitle = "", batteryImageKey = ""
+    private let batteryAttachment = NSTextAttachment()
+
+    static let batteryIconSize = NSSize(width: 34, height: 15)
+    static let batteryKey = "menuBarBattery"
+
+    /// "4:36", padded to the same width; while still calculating, dots that build up with each update (·, ··, ···).
+    private static var dots = 0
+    static func batteryTime(_ s: Double?, animate: Bool = false) -> String {
+        guard let s else {
+            if animate { dots = (dots + 1) % 3 }
+            let d = String(repeating: "·", count: dots + 1)
+            return d + String(repeating: "\u{2007}", count: 5 - d.count)       // same width as "12:34"
+        }
+        let t = BT.dur(s)
+        return String(repeating: "\u{2007}", count: max(0, 5 - t.count)) + t
+    }
+
+    /// The battery for the menu bar (monochrome): outline, fill with the charge, % inside, ⚡ while charging.
+    static func batteryImage(level: Double, charging: Bool) -> NSImage {
+        let size = batteryIconSize
+        return NSImage(size: size, flipped: false) { r in
+            let body = NSRect(x: 0.5, y: 0.5, width: r.width - 4, height: r.height - 1)
+            let tint = NSColor.labelColor.withAlphaComponent(0.35)     // monochrome, like the other menu bar icons
+            NSColor.labelColor.withAlphaComponent(0.55).setStroke()
+            let outline = NSBezierPath(roundedRect: body, xRadius: 3.5, yRadius: 3.5); outline.lineWidth = 1; outline.stroke()
+            NSColor.labelColor.withAlphaComponent(0.55).setFill()
+            NSBezierPath(roundedRect: NSRect(x: r.width - 2.5, y: r.height / 2 - 2.5, width: 2, height: 5), xRadius: 1, yRadius: 1).fill()
+            tint.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 2, y: 2, width: max(1.5, (body.width - 3) * min(1, level / 100)), height: body.height - 3),
+                         xRadius: 2, yRadius: 2).fill()
+            let label = (charging ? "⚡︎" : "") + "\(Int(level))%"
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9, weight: .semibold), .foregroundColor: NSColor.labelColor]
+            let ts = (label as NSString).size(withAttributes: attrs)
+            (label as NSString).draw(at: NSPoint(x: body.midX - ts.width / 2, y: body.midY - ts.height / 2), withAttributes: attrs)
+            return true
+        }
+    }
 
     /// Always 4 characters before " W": "9.4" → " 9.4", "18.7", "105" (no decimal from 100 W).
     static func label(_ w: Double) -> String {
@@ -339,6 +438,11 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             model.refresh()
             LiveBreakdown.shared.start()
             popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
+            if outsideClicks == nil {
+                outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                    MainActor.assumeIsolated { if self?.popover.isShown == true { self?.popover.performClose(nil) } }
+                }
+            }
             if let w = popover.contentViewController?.view.window {
                 // Also over full-screen apps (their own Space): without this macOS keeps the panel off screen.
                 w.collectionBehavior.formUnion([.fullScreenAuxiliary, .canJoinAllSpaces])

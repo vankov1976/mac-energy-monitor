@@ -17,6 +17,7 @@ enum VerifyTests {
     }
 
     static func runIfAsked() {
+        BatteryChecks.runIfAsked()
         // `--pmsetmem`: memory of the parsed sleep log (process memory before/after reading it).
         if CommandLine.arguments.contains("--pmsetmem") {
             func rss() -> Double {

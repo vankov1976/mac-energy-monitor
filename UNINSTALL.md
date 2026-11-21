@@ -1,6 +1,6 @@
 # Removing Mac Energy Monitor completely
 
-Everything the app stores on the Mac (checked 18 Nov 2026, version 2.0):
+Everything the app stores on the Mac (checked 21 Nov 2026, version 2.1):
 
 | What | Where | Size | Notes |
 |---|---|---|---|

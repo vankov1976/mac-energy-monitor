@@ -2,10 +2,11 @@
 
 A small native menu bar app for Apple silicon Macs that shows **how much power your Mac uses right now, and where the energy went** over the last hour, days or weeks, per app and per part of the hardware.
 
-- **Menu bar:** the whole Mac's power draw in watts, updated every second (or every 2, 5 or 10 s).
+- **Menu bar:** the whole Mac's power draw in watts, updated every second (or every 2, 5 or 10 s), and on Macs with a battery its charge with the time left or until full (monochrome; switch it off with **In menu bar** in the panel). Click it for a panel with the battery and **Start at login** at the top; it closes when you click anywhere else.
 - **Live view:** a 5-minute chart, a breakdown into display, CPU (user apps/services and system processes), GPU, memory, the rest of the chip and other hardware, plus a table of the apps and services using power right now.
 - **History:** 1 hour, 24 hours, 3 days, 7 days, all, or any custom period. Energy (Wh), average power while awake, how long the Mac was awake, asleep and switched off, screen-on time, the same hardware breakdown (including the energy used while asleep), and a sortable, filterable table of apps with energy, running time, CPU time and screen time.
-- **Sleep only:** what the Mac did while it was asleep: the energy and average power of every sleep (on battery and on the charger), every wake-up grouped by reason (Wi-Fi or Bluetooth, timers set by macOS such as Power Nap, you, the charger), the times it didn't sleep and what kept it awake, and plain-language hints with the settings that matter. Filter by power source (battery or charger) and minimum energy: the cards, all tables and the hints then count only the matching sleeps. Click a sleep's number of wake-ups to see just its wake-ups by reason. Technical macOS names are shown in plain words; hover over a blue name for an explanation and the original macOS name or setting.
+- **Sleep only:** what the Mac did while it was asleep: the energy and average power of every sleep (on battery and on the charger), every wake-up grouped by reason (Wi-Fi or Bluetooth, timers set by macOS such as Power Nap, you, the charger), the times it didn't sleep and what kept it awake, and plain-language hints with the settings that matter. Filter by power source (battery or charger) and minimum energy: the cards, all tables and the hints then count only the matching sleeps. Click a sleep's number of wake-ups to see just its wake-ups by reason; hover over **Battery** in a sleep's row for its period, charge used, time asleep, energy and average power. Technical macOS names are shown in plain words; hover over a blue name for an explanation and the original macOS name or setting.
+- **Battery:** the battery button in the window's top row shows the charge in %, ⚡ while charging, and the time left or until full. Click it for the battery view: a card with the current state (on battery, charging or on the charger, since when, awake with display on, asleep, switched off, power now) and a card with the battery's health. Below, a chart of every charge (newest on the left): the charge used, and how long the Mac was awake, had the display on, was asleep or switched off. Hover over a charge for its details. The time estimate is the app's own: the energy left divided by the average power of the last 5 minutes, and the time until full follows this Mac's own charging curve, learned from its log.
 - **Long-term history:** macOS keeps its power logs for only about 10 days. The app saves a small summary of every finished day, so its history goes back as far as the app has been running.
 - **Start at login** (hidden, menu bar only), light/dark appearance, and it remembers your views and filters.
 
@@ -16,13 +17,15 @@ No admin rights, no tracking. The only network access is an optional check for n
 <table>
 <tr>
 <td width="68%"><img src="docs/history.png" alt="History for 7 days: energy, average power while awake, screen time and a table of apps"></td>
-<td width="32%"><img src="docs/menubar.png" alt="Menu bar panel: power now, average power, live breakdown and top apps"></td>
+<td width="32%"><img src="docs/menubar.png" alt="Menu bar panel: battery, power now, average power, live breakdown and top apps"></td>
 </tr>
 <tr>
 <td align="center"><sub>History (here 7 days)</sub></td>
 <td align="center"><sub>Menu bar panel</sub></td>
 </tr>
 </table>
+
+![Battery view: current state, battery health, and every charge with the charge used and time awake, asleep and switched off](docs/battery.png)
 
 ![Sleep only: energy while asleep, hints, and every sleep with its power source, cause, wake-ups and energy](docs/sleep.png)
 
@@ -71,6 +74,8 @@ All data comes from what macOS already measures:
 | Apps, live | Per-process energy counters from macOS (`proc_pid_rusage`) |
 | History | macOS's own power log (`/var/db/powerlog`, read-only) |
 | Sleep energy | macOS's whole-Mac power counter, which keeps counting while the Mac sleeps; on battery, the battery's own charge before and after a sleep |
+| Battery, live | The battery's own data (charge, capacity, current) and the SMC power sensors for the whole Mac and the charger |
+| Battery, per charge | macOS's battery log (in `/var/db/powerlog`) checked against its sleep log |
 | Sleeps, wake-ups, what kept the Mac awake | macOS's sleep log (`pmset -g log`, read-only); it reaches back about a week |
 
 Some parts are **estimates**: for example "Other hardware" is what remains of the whole Mac after the chip and display, and history older than macOS's logs comes from the app's saved daily summaries. Click **"How these numbers are measured"** at the bottom of the window for the details.

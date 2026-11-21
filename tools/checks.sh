@@ -22,5 +22,6 @@ echo "== archive"; timeout 900 "$B" --archivecheck $from $pretend 2>&1 | grep -E
 run filter "$B" --filtercheck
 run sleep "$B" --sleepcheck 7
 run battery "$B" --batterycheck
+run charges "$B" --chargecheck
 run sleepcompare "$B" --sleepcompare
 echo "== gap"; tools/gaptest.sh 2>&1 | tail -3

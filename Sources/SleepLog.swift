@@ -54,6 +54,7 @@ struct SleepReport {
         let wakes: Int
         var unusual = false          // more than twice this Mac's usual sleep power (same power source)
         var causeTip: String? = nil  // what started it, in more detail (e.g. which app asked to sleep)
+        var levels: (from: Double, to: Double)? = nil   // battery charge (%) at the start and end (on battery)
         var hours: Double { end.timeIntervalSince(start) / 3600 }
         var avgW: Double? { wh.flatMap { hours > 0.01 ? $0 / hours : nil } }
         // Sort keys for the tables (no optionals)

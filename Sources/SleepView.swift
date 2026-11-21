@@ -51,7 +51,12 @@ final class SleepModel: ObservableObject {
         running = (from, to); waiting = nil
         let log = sharedLog
         logQueue.async {
-            let r = SleepAnalysis.report(log, from: from, to: to)
+            var r = SleepAnalysis.report(log, from: from, to: to)
+            // Battery charge at the start and end of each sleep on battery (for the Power column's tooltip).
+            let lv = BatteryHistory.levels(log, r.sessions.filter { $0.onBattery == true }.map { ($0.start, $0.end) })
+            for i in r.sessions.indices where r.sessions[i].onBattery == true {
+                r.sessions[i].levels = lv[r.sessions[i].start.timeIntervalSince1970]
+            }
             DispatchQueue.main.async {
                 guard gen == self.generation else { return }    // another period was chosen meanwhile
                 self.running = nil
@@ -230,7 +235,12 @@ struct SleepSectionsView: View {
             empty(report.allSessions > 0 ? "No sleep matches the Power and Minimum energy filters." : "No sleep in this period.")
         } else {
             Table(sessions, sortOrder: $sessionSort) {
-                TableColumn("Power", value: \.power) { s in tinted(s, Text(s.power)) }
+                TableColumn("Power", value: \.power) { s in
+                    // Blue like every other value with a tooltip.
+                    tinted(s, Text(s.power).foregroundColor(s.onBattery == true ? Color.tip : nil))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .tip(s.onBattery == true ? BT.sleepTip(s) : "")
+                }
                     .width(min: 80, ideal: 80)        // "Charger" and the header with its sort arrow; the table scrolls sideways if needed
                 TableColumn("Sleep started by", value: \.cause) { s in
                     if let t = s.causeTip { Text(s.cause).foregroundStyle(Color.tip).tip(t) } else { Text(s.cause) }

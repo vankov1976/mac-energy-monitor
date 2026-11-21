@@ -112,13 +112,17 @@ struct ContentView: View {
     @AppStorage("sleepOnly") private var sleepOnly = false
     @AppStorage("breakdownHeight") private var breakdownHeight = 150.0
     @State private var forceSleep = false
+    @State private var batteryOn = false     // battery view (off when the window opens)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             UpdateBanner()
             controls
-            if preset == .custom { customRow }
-            if preset == .live {
+            if batteryOn {
+                BatteryView()     // ignores the selected time frame
+            } else if preset == .custom { customRow }
+            if batteryOn {
+            } else if preset == .live {
                 LivePowerView()
                 LiveTableView(search: search, kind: $kind)
             } else if sleepOnly {
@@ -152,8 +156,8 @@ struct ContentView: View {
                 if model.report != nil { filters }    // no filters while the period is being read
                 table
             }
-if preset != .live {
-                InfoNote(sections: sleepOnly ? Explanations.sleep : Explanations.history)
+if preset != .live || batteryOn {
+                InfoNote(sections: batteryOn ? Explanations.battery : sleepOnly ? Explanations.sleep : Explanations.history)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)   // same position in every view
@@ -161,12 +165,12 @@ if preset != .live {
         .toolbar {
             // Order: filter, refresh, appearance. The filter is hidden in "Sleep only" (no app list there).
             ToolbarItem {
-                if !(sleepOnly && preset != .live) { FilterField(text: $search) }
+                if !(sleepOnly && preset != .live) && !batteryOn { FilterField(text: $search) }
             }
             // A gap, so the filter and the refresh button are separate (macOS 26 groups neighbouring items).
             if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
             ToolbarItem {
-                if preset != .live {    // Live updates by itself
+                if preset != .live && !batteryOn {    // Live updates by itself
                     // Refresh also reads macOS's sleep log again (new sleeps since it was read).
                     Button { PMSetLog.shared.markStale(); forceSleep = true; reload(clear: true) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .help("Reload the power logs")
@@ -195,15 +199,23 @@ if preset != .live {
         }
         .onAppear {
             sleepOnly = false        // the window always opens on the app energy view ("Sleep only" off)
+            if BatteryModel.viewRequested { BatteryModel.viewRequested = false; batteryOn = true }   // from the menu bar panel
+            #if DIAGNOSTICS
+            if ProcessInfo.processInfo.environment["MEM_SHOT_BATTERY"] != nil { batteryOn = true }   // --windowshot of the battery view
+            #endif
             reload(); appearance.apply()
             SleepModel.prefetch()
             sleepModel.setFilters(power: sleepPower, minEnergy: sleepMinEnergy)
         }
         .onDisappear { SleepModel.windowClosed() }
+        .onReceive(NotificationCenter.default.publisher(for: BatteryModel.showViewNote)) { _ in
+            BatteryModel.viewRequested = false; batteryOn = true
+        }
         .onChange(of: model.report?.end) { _, _ in loadSleep() }
         // macOS's sleep log was read in the background: the sleep/awake split of the history changes.
         .onReceive(NotificationCenter.default.publisher(for: PMSetLog.updated)) { _ in if preset != .live { reload() } }
-        .onChange(of: sleepOnly) { _, _ in loadSleep() }
+        .onChange(of: sleepOnly) { _, on in if on { batteryOn = false }; loadSleep() }
+        .onChange(of: batteryOn) { _, on in if on { sleepOnly = false } }
         .onChange(of: sleepPower) { _, p in sleepModel.setFilters(power: p, minEnergy: sleepMinEnergy) }
         .onChange(of: sleepMinEnergy) { _, m in sleepModel.setFilters(power: sleepPower, minEnergy: m) }
         .onChange(of: appearance) { _, a in a.apply() }
@@ -213,6 +225,7 @@ if preset != .live {
 
     private var controls: some View {
         HStack(alignment: .center, spacing: 16) {
+            if !batteryOn {
             Picker("Time frame", selection: $preset) {
                 ForEach(Preset.allCases) { p in
                     if p == .live { Image(nsImage: Self.liveLabel).tag(p) } else { Text(p.rawValue).tag(p) }
@@ -235,8 +248,9 @@ if preset != .live {
                 .fixedSize()
                 .help("Show only the time the Mac was asleep: its energy, every wake-up and why, and times it didn't sleep")
             }
-
+            }
             Spacer()
+            BatteryButton(isOn: $batteryOn)     // always just left of "Start at login"
             StartAtLoginToggle()
             // Quit, like in the menu bar panel (closing the window keeps the app in the menu bar).
             Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
