@@ -10,8 +10,7 @@ enum BT {
         let m = Int((s / 60).rounded()); return String(format: "%d:%02d", m / 60, m % 60)
     }
     static func time(_ d: Date) -> String {
-        Calendar.current.isDateInToday(d) ? d.formatted(date: .omitted, time: .shortened)
-            : d.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        Calendar.current.isDateInToday(d) ? Clock.time(d) : Clock.dayTime(d)
     }
 
     // Button
@@ -20,6 +19,8 @@ enum BT {
     static let fullyCharged = String(localized: "Fully charged")
     static func pausedAt(_ level: Double) -> String { String(localized: "Charging paused at \(pct(level))") }
     static let calculating = String(localized: "Calculating…")
+    static let menuFull = String(localized: "Full", comment: "menu bar, after the battery icon: fully charged")
+    static let menuPaused = String(localized: "Paused", comment: "menu bar, after the battery icon: charging paused")
     static let showTip = String(localized: "Show battery details")
     static let inMenuBar = String(localized: "In menu bar")
     static let inMenuBarTip = String(localized: "Show the battery (charge and time left) in the menu bar, after the watts")
@@ -72,10 +73,10 @@ enum BT {
     }
     /// "14 Nov 03:05–13:10", or with both dates when the charge spans midnight.
     static func range(_ c: BatteryCharge) -> String {
-        let start = c.start.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        let start = Clock.dayTime(c.start)
         if c.running { return start + " – " + running }
-        let end = Calendar.current.isDate(c.start, inSameDayAs: c.end) ? c.end.formatted(date: .omitted, time: .shortened)
-            : c.end.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        let end = Calendar.current.isDate(c.start, inSameDayAs: c.end) ? Clock.time(c.end)
+            : Clock.dayTime(c.end)
         return start + "–" + end
     }
     static func displayLabel(_ s: Double) -> String { String(localized: "\(dur(s)) display on") }
@@ -89,9 +90,9 @@ enum BT {
     static let offRow = String(localized: "Switched off")
     static func chargeTip(_ c: BatteryCharge) -> String {
         let sameDay = Calendar.current.isDate(c.start, inSameDayAs: c.end)
-        let start = c.start.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-        let end = c.running ? running : sameDay ? c.end.formatted(date: .omitted, time: .shortened)
-            : c.end.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        let start = Clock.dayTime(c.start)
+        let end = c.running ? running : sameDay ? Clock.time(c.end)
+            : Clock.dayTime(c.end)
         var s = String(localized: "\(start) – \(end)")
         s += "\n" + String(localized: "\(pct(c.used)) used (\(pct(c.startLevel)) → \(pct(c.endLevel))) in \(dur(c.end.timeIntervalSince(c.start)))")
         if let a = c.awake, let z = c.asleep {
@@ -107,8 +108,8 @@ enum BT {
     /// Tooltip of "Battery" in the Sleeps table: period, charge used, time asleep, energy and average power.
     static func sleepTip(_ s: SleepReport.Session) -> String {
         let sameDay = Calendar.current.isDate(s.start, inSameDayAs: s.end)
-        let start = s.start.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-        let end = sameDay ? s.end.formatted(date: .omitted, time: .shortened) : s.end.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        let start = Clock.dayTime(s.start)
+        let end = sameDay ? Clock.time(s.end) : Clock.dayTime(s.end)
         var t = start + " – " + end
         if let l = s.levels {
             t += "\n" + (l.to > l.from + 1

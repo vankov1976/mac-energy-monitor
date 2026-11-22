@@ -94,32 +94,58 @@ import Charts
 
     /// Right after plugging in or out, macOS's estimate still belongs to the previous state: "Calculating…".
     private var justChanged: Bool { changedAt.map { Date().timeIntervalSince($0.t) < 90 } ?? false }
+    /// The current state, live: since when (and at which charge) the Mac is on battery or on the charger, and for
+    /// the running charge on battery the time awake (display on), asleep and switched off up to now. The state card
+    /// and the chart's running charge both use this, so they always show the same values.
+    struct Live {
+        var since: Date?, at: Double
+        var logCurrent: Bool                 // macOS's log already has the current state
+        var awake: Double?, displayOn: Double?, asleep: Double?, off = 0.0   // on battery only; nil = unknown
+    }
+    func live(_ b: BatteryNow, now: Date = Date()) -> Live {
+        let h = history
+        // The log lags: if its last state differs from the live one, the change happened after it.
+        // A change this app saw itself that is newer than the log's wins (the log may not have it yet).
+        let seen = changedAt.flatMap { c in (h?.since).map { c.t > $0 } ?? true ? c : nil }
+        let logCurrent = h?.lastOnCharger == b.onCharger && seen == nil
+        let since = seen?.t ?? (logCurrent ? h?.since : nil)
+        let at = seen?.level ?? (logCurrent ? (h?.sinceLevel ?? b.level) : b.level)
+        var r = Live(since: since, at: at, logCurrent: logCurrent)
+        guard !b.onCharger, let sl = logCurrent ? h?.current?.asleep : 0 else { return r }
+        // Live: the time since unplugging is awake + asleep + switched off (the window is open, so the Mac is awake
+        // now; the logs lag behind). Display on: the log's value plus the time awake since then.
+        let forS = since.map { now.timeIntervalSince($0) } ?? 0
+        r.off = logCurrent ? (h?.current?.off ?? 0) : 0
+        let aw = max(0, forS - sl - r.off)
+        let logged = logCurrent ? (h?.current?.awake ?? 0) : 0
+        r.awake = aw; r.asleep = sl
+        r.displayOn = min(aw, (logCurrent ? (h?.current?.displayOn ?? 0) : 0) + max(0, aw - logged))
+        return r
+    }
+
     /// The charges for the chart, brought up to date with what this app saw live (macOS's log lags a minute or more):
-    /// a charge that started after the log's last entry appears at once as "running"; plugged in: nothing is running.
+    /// the running charge has exactly the state card's values; a charge that started after the log's last entry
+    /// appears at once as "running"; plugged in: nothing is running.
     var chartCharges: [BatteryCharge] {
         var cs = history?.charges ?? []
         guard let b = now else { return cs }
-        let seen = changedAt.flatMap { c in history?.lastOnCharger != b.onCharger || (history?.since).map { c.t > $0 } == true ? c : nil }
+        let t = Date(), l = live(b, now: t)
         if b.onCharger {
             if let i = cs.indices.last, cs[i].running {
                 cs[i].running = false
-                if let s = seen { cs[i].end = s.t }
+                if !l.logCurrent, let s = l.since { cs[i].end = s }
             }
-        } else if seen == nil, let i = cs.indices.last, cs[i].running, let aw = cs[i].awake, history?.lastOnCharger == false {
-            // The running charge, brought up to now like the card: the time since the log was read was awake
-            // (the window is open), with the display on.
-            let extra = max(0, Date().timeIntervalSince(historyAt))
+        } else if l.logCurrent, let i = cs.indices.last, cs[i].running {
             let c = cs[i]
-            var r = BatteryCharge(start: c.start, end: Date(), startLevel: c.startLevel, endLevel: b.level,
-                                  awake: aw + extra, asleep: c.asleep, displayOn: (c.displayOn ?? 0) + extra,
+            var r = BatteryCharge(start: l.since ?? c.start, end: t, startLevel: l.at, endLevel: b.level,
+                                  awake: l.awake ?? c.awake, asleep: l.asleep ?? c.asleep, displayOn: l.displayOn ?? c.displayOn,
                                   wh: c.wh, avgAwakeW: c.avgAwakeW, running: true)
-            r.off = c.off
+            r.off = l.off
             cs[i] = r
-        } else if let s = seen, cs.last.map({ s.t.timeIntervalSince($0.start) > 60 }) ?? true {
+        } else if !l.logCurrent, let s = l.since, cs.last.map({ s.timeIntervalSince($0.start) > 60 }) ?? true {
             if let i = cs.indices.last, cs[i].running { cs[i].running = false }
-            let aw = Date().timeIntervalSince(s.t)
-            cs.append(BatteryCharge(start: s.t, end: Date(), startLevel: s.level, endLevel: b.level,
-                                    awake: aw, asleep: 0, displayOn: aw, wh: nil, avgAwakeW: nil, running: true))
+            cs.append(BatteryCharge(start: s, end: t, startLevel: l.at, endLevel: b.level,
+                                    awake: l.awake, asleep: l.asleep, displayOn: l.displayOn, wh: nil, avgAwakeW: nil, running: true))
         }
         return cs
     }
@@ -141,23 +167,39 @@ struct BatteryButton: View {
 
     var body: some View {
         if let b = model.now {
-            Button { isOn.toggle() } label: {
-                HStack(spacing: 6) {
-                    BatteryIcon(level: b.level, charging: b.onCharger && !b.fullyCharged || b.charging)
-                    Text(status(b)).font(.callout).monospacedDigit()
-                }
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(isOn ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isOn ? Color.accentColor.opacity(0.6) : .secondary.opacity(0.3), lineWidth: 0.5))
-                .contentShape(Rectangle())
+            // A narrow window (the top row has to fit 940 pt): a shorter text ("3:45", "Full"), or only the icon.
+            ViewThatFits(in: .horizontal) {
+                button(b, status(b))
+                button(b, shortStatus(b))
+                button(b, nil)
             }
-            .buttonStyle(.plain)
-            .fixedSize()
-            .tip(isOn ? BT.hideTip : BT.showTip)
+            .tip(status(b) + "\n" + (isOn ? BT.hideTip : BT.showTip))
             .accessibilityLabel(BT.pct(b.level) + ", " + status(b))
             .onAppear { model.start() }
             .onDisappear { model.stop() }
         }
+    }
+
+    private func button(_ b: BatteryNow, _ text: String?) -> some View {
+        Button { isOn.toggle() } label: {
+            HStack(spacing: 6) {
+                BatteryIcon(level: b.level, charging: b.onCharger && !b.fullyCharged || b.charging,
+                            full: b.onCharger && !b.charging && (b.fullyCharged || b.level >= 100))
+                if let text { Text(text).font(.callout).monospacedDigit() }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(isOn ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isOn ? Color.accentColor.opacity(0.6) : .secondary.opacity(0.3), lineWidth: 0.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    /// As in the menu bar: the time alone, "Full" or "Paused".
+    private func shortStatus(_ b: BatteryNow) -> String {
+        if b.onCharger && !b.charging { return b.fullyCharged || b.level >= 100 ? BT.menuFull : BT.menuPaused }
+        return (b.onCharger ? model.secondsToFull : model.secondsLeft).map(BT.dur) ?? "…"
     }
 
     private func status(_ b: BatteryNow) -> String {
@@ -172,6 +214,7 @@ struct BatteryButton: View {
 /// Battery symbol that fills with the charge, % inside, ⚡ while charging, red below 20 %.
 struct BatteryIcon: View {
     let level: Double, charging: Bool
+    var full = false          // fully charged: only a bolt inside
     var body: some View {
         let low = level < 20 && !charging
         HStack(spacing: 1) {
@@ -184,8 +227,12 @@ struct BatteryIcon: View {
                         .padding(2)
                 }
                 HStack(spacing: 1) {
-                    if charging { Image(systemName: "bolt.fill").font(.system(size: 8)) }
-                    Text("\(Int(level.rounded()))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                    if full {
+                        Image(systemName: "bolt.fill").font(.system(size: 11, weight: .semibold))
+                    } else {
+                        if charging { Image(systemName: "bolt.fill").font(.system(size: 8)) }
+                        Text("\(Int(level.rounded()))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -248,26 +295,16 @@ struct BatteryView: View {
 
     @ViewBuilder private func stateCard(_ b: BatteryNow) -> some View {
         let h = model.history
-        // The log lags: if its last state differs from the live one, the change happened after it.
-        // A change this app saw itself that is newer than the log's wins (the log may not have it yet).
-        let seen = model.changedAt.flatMap { c in (h?.since).map { c.t > $0 } ?? true ? c : nil }
-        let logCurrent = h?.lastOnCharger == b.onCharger && seen == nil
-        let since = seen?.t ?? (logCurrent ? h?.since : nil)
-        let at = seen?.level ?? (logCurrent ? (h?.sinceLevel ?? b.level) : b.level)
+        let l = model.live(b)
+        let since = l.since, at = l.at, logCurrent = l.logCurrent
         let forS = since.map { Date().timeIntervalSince($0) } ?? 0
         if !b.onCharger {
             let title = since.map { BT.onBatteryFor(forS, since: $0, at: at) } ?? BT.onBattery
             card(title, tip: BT.tipState, BT.pct(b.level) + " · " + (model.secondsLeft.map(BT.left) ?? BT.calculating)) {
-                if let sl = logCurrent ? h?.current?.asleep : 0 {
-                    // Live: the time since unplugging is awake + asleep (the window is open, so the Mac is awake now;
-                    // the logs lag behind). Display on: the log's value plus the time since it was read.
-                    let off = logCurrent ? (h?.current?.off ?? 0) : 0         // shut down in between
-                    let aw = max(0, forS - sl - off)
-                    let logged = logCurrent ? (h?.current?.awake ?? 0) : 0
-                    let on = min(aw, (logCurrent ? (h?.current?.displayOn ?? 0) : 0) + max(0, aw - logged))
-                    row(BT.awakeRow, BT.dur(aw) + " (" + BT.displayLabel(on) + ")", tip: BT.tipAwake)
+                if let aw = l.awake, let sl = l.asleep {
+                    row(BT.awakeRow, BT.dur(aw) + " (" + BT.displayLabel(l.displayOn ?? 0) + ")", tip: BT.tipAwake)
                     row(BT.asleepRow, BT.dur(sl), tip: BT.tipAsleep)
-                    if off >= 60 { row(BT.offRow, BT.dur(off), tip: BT.tipOff) }
+                    if l.off >= 60 { row(BT.offRow, BT.dur(l.off), tip: BT.tipOff) }
                 }
                 row(BT.drawingNow, BT.watts(b.batteryW) + " · \(Int(b.batteryMilliamps.rounded())) mA", tip: BT.tipDrawing)
                 if logCurrent, let w = h?.current?.avgAwakeW { row(BT.avgAwake, BT.watts(w), tip: BT.tipAvgAwake) }
@@ -366,7 +403,7 @@ struct ChargeChart: View, Equatable {
                 HStack(alignment: .top, spacing: 0) {
                 Color.clear.frame(width: Self.axisW)            // room for the fixed scale on the left
                 ScrollView(.horizontal) {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Chart(used) { b in
                             BarMark(x: .value("Charge", b.label), y: .value(BT.chargeUsed, b.value), width: .fixed(barW))
                                 .foregroundStyle(LinearGradient(colors: [Color.green.opacity(0.55), Color.green],
@@ -389,7 +426,7 @@ struct ChargeChart: View, Equatable {
                         .chartOverlay { tipColumns($0, labels, byLabel, report: 1) }
                         .chartLegend(.hidden)                  // one series; each bar says "… % used"
                         .padding(.top, 8)                      // the top value label ("100 %") isn't cut off
-                        .frame(minHeight: 45, maxHeight: 230)
+                        .frame(minHeight: 35, maxHeight: 230)
 
                         Chart(hours) { b in
                             BarMark(x: .value("Charge", b.label), y: .value("Hours", b.value), width: .fixed(barW))
@@ -425,7 +462,7 @@ struct ChargeChart: View, Equatable {
                         .chartXScale(domain: labels)
                         .chartOverlay { tipColumns($0, labels, byLabel, report: 2) }
                         .chartLegend(.hidden)
-                        .frame(minHeight: 95, maxHeight: 300)
+                        .frame(minHeight: 74, maxHeight: 300)
                     }
                     .frame(width: contentW)
                     .padding(.bottom, 4)

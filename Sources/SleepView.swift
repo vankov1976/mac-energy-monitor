@@ -122,7 +122,7 @@ struct SleepSectionsView: View {
     static var dateWidth: CGFloat {
         let cal = Calendar.current
         let dates = (1...12).compactMap { cal.date(from: DateComponents(year: 2026, month: $0, day: 28, hour: 22, minute: 58)) }
-        return textWidth(dates.map { $0.formatted(date: .abbreviated, time: .shortened) }) + 16
+        return textWidth(dates.map(Clock.dateTime)) + 16
     }
     private static func textWidth(_ texts: [String]) -> CGFloat {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
@@ -137,7 +137,7 @@ struct SleepSectionsView: View {
         VStack(alignment: .leading, spacing: 10) {
             if !report.hints.isEmpty { hints }
             if let d = report.detailsFrom, d > periodStart.addingTimeInterval(3600) {
-                Label("Sleep details reach back to \(d.formatted(date: .abbreviated, time: .shortened)): macOS keeps its sleep log for about a week.",
+                Label("Sleep details reach back to \(Clock.dateTime(d)): macOS keeps its sleep log for about a week.",
                       systemImage: "calendar.badge.exclamationmark")
                     .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
@@ -153,7 +153,7 @@ struct SleepSectionsView: View {
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 .id(focus == nil)   // a new control when a tab is hidden or shown: macOS doesn't resize the segments again
                 if tab == .wakes, let f = focus {   // which sleep "Wake-ups by reason" shows
-                    Text("Sleep \(f.start.formatted(date: .abbreviated, time: .shortened)) – \(f.end.formatted(date: .abbreviated, time: .shortened))")
+                    Text("Sleep \(Clock.dateTime(f.start)) – \(Clock.dateTime(f.end))")
                         .foregroundStyle(.secondary).lineLimit(1)
                 }
             }
@@ -264,9 +264,9 @@ struct SleepSectionsView: View {
                 TableColumn("Duration", value: \.hours) { s in
                     tinted(s, Text(ContentView.duration(s.hours))).frame(maxWidth: .infinity, alignment: .trailing)
                 }.width(95)
-                TableColumn("From", value: \.start) { s in tinted(s, Text(s.start.formatted(date: .abbreviated, time: .shortened))) }
+                TableColumn("From", value: \.start) { s in tinted(s, Text(Clock.dateTime(s.start))) }
                     .width(Self.dateWidth)
-                TableColumn("To", value: \.end) { s in tinted(s, Text(s.end.formatted(date: .abbreviated, time: .shortened))) }
+                TableColumn("To", value: \.end) { s in tinted(s, Text(Clock.dateTime(s.end))) }
                     .width(Self.dateWidth)
             }
             .monospacedDigit()
@@ -344,8 +344,8 @@ struct SleepSectionsView: View {
                     .width(85)
                 TableColumn("Duration", value: \.hours) { n in Text(ContentView.duration(n.hours)).frame(maxWidth: .infinity, alignment: .trailing) }
                     .width(90)
-                TableColumn("From", value: \.start) { n in Text(n.start.formatted(date: .abbreviated, time: .shortened)) }.width(Self.dateWidth)
-                TableColumn("To", value: \.end) { n in Text(n.end.formatted(date: .abbreviated, time: .shortened)) }.width(Self.dateWidth)
+                TableColumn("From", value: \.start) { n in Text(Clock.dateTime(n.start)) }.width(Self.dateWidth)
+                TableColumn("To", value: \.end) { n in Text(Clock.dateTime(n.end)) }.width(Self.dateWidth)
                 TableColumn("Kept awake by") { n in
                     bullets(lines: noSleepLines, n.blockers.isEmpty ? [Bullet(name: "Not logged")] : n.blockers.map {
                         Bullet(name: $0.name, after: " · \(ContentView.duration($0.secs / 3600))",

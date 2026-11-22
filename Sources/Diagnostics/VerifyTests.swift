@@ -226,6 +226,9 @@ enum VerifyTests {
                     // MEM_SHOT_TAB=wakes|nosleep: the tab in "Sleep only"; MEM_SHOT_DARK=1: dark appearance.
                     let env = ProcessInfo.processInfo.environment
                     let sw = Double(env["MEM_SHOT_W"] ?? "") ?? 1213, sh = Double(env["MEM_SHOT_H"] ?? "") ?? 766
+                    // MEM_SHOT_PRESET: the time frame ("Live", "24 hours", …), put back afterwards.
+                    let oldPreset = UserDefaults.standard.string(forKey: "preset")
+                    if let p = env["MEM_SHOT_PRESET"] { UserDefaults.standard.set(p, forKey: "preset") }
                     let v = NSHostingView(rootView: ContentView().frame(width: sw, height: sh))
                     if env["MEM_SHOT_DARK"] != nil { NSApp.appearance = NSAppearance(named: .darkAqua) }
                     if env["MEM_SHOT_SLEEP"] != nil {
@@ -242,9 +245,66 @@ enum VerifyTests {
                                 v.cacheDisplay(in: v.bounds, to: rep)
                                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
                             }
+                            if env["MEM_SHOT_PRESET"] != nil { UserDefaults.standard.set(oldPreset, forKey: "preset") }
+                            if env["MEM_SHOT_SLEEP"] != nil { UserDefaults.standard.set(false, forKey: "sleepOnly") }
+                            // MEM_SHOT_CHECK=<name>: every probed view (top controls, footer, the whole content) must
+                            // lie inside the window: nothing cut off at this size.
+                            if let name = env["MEM_SHOT_CHECK"] {
+                                // Inside the window's 12-pt margin (ContentView's padding), so both sides look the same.
+                                let win = CGRect(x: 0, y: 0, width: sw, height: sh).insetBy(dx: 11.5, dy: 11.5)
+                                // The content may be taller than its area (it scrolls), but never wider than the window.
+                                let f = LayoutProbe.frames
+                                var bad = f.filter { k, r in k == "content" ? r.minX < win.minX || r.maxX > win.maxX : !win.contains(r) }
+                                    .map { k, r in String(format: "%@ at x %.0f…%.0f, y %.0f…%.0f", k, r.minX, r.maxX, r.minY, r.maxY) }
+                                for k in ["top controls", "content area", "content"] where f[k] == nil { bad.append(k + " not drawn") }
+                                if name != "Live" && f["footer"] == nil { bad.append("footer not drawn") }
+                                let scroll = (f["content"]?.height ?? 0) - (f["content area"]?.height ?? 0)
+                                if bad.isEmpty { print(String(format: "layout %@ %.0f×%.0f: all inside%@", name, sw, sh,
+                                                              scroll > 1.5 ? String(format: " (content scrolls by %.0f pt)", scroll) : "")) }
+                                for b in bad.sorted() { print(String(format: "FAIL: layout %@ %.0f×%.0f: %@ (outside the window)", name, sw, sh, b)) }
+                            }
                             exit(0)
                         }
                     }
+                }
+            }
+            return
+        }
+        // `--background --menubarshot <png>`: the menu bar item (watts + battery) as the menu bar draws it, dark.
+        if let i = CommandLine.arguments.firstIndex(of: "--menubarshot"), i + 1 < CommandLine.arguments.count {
+            let out = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                MainActor.assumeIsolated {
+                    NSApp.appearance = NSAppearance(named: .darkAqua)
+                    let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+                    let bat = BatteryModel.shared
+                    guard let b = bat.now else { exit(1) }
+                    let level = b.level.rounded(), charging = b.onCharger && !b.fullyCharged || b.charging
+                    let full = b.onCharger && !b.charging && (b.fullyCharged || b.level >= 100)
+                    let time = b.onCharger && !b.charging ? (full ? BT.menuFull : BT.menuPaused) : StatusBarController.batteryTime(nil)
+                    let att = NSTextAttachment()
+                    let s = NSMutableAttributedString(string: " " + StatusBarController.label(14.2) + "  ", attributes: [.font: font, .foregroundColor: NSColor.white])
+                    NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+                        att.image = StatusBarController.batteryImage(level: level, charging: charging, full: full)
+                    }
+                    att.bounds = CGRect(x: 0, y: -4, width: StatusBarController.batteryIconSize.width, height: StatusBarController.batteryIconSize.height)
+                    s.append(NSAttributedString(attachment: att))
+                    s.append(NSAttributedString(string: " " + time, attributes: [.font: font, .foregroundColor: NSColor.white]))
+                    let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)!
+                    let size = NSSize(width: 24 + s.size().width + 16, height: 24), scale: CGFloat = 3
+                    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+                                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                    rep.size = size
+                    NSGraphicsContext.saveGraphicsState()
+                    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                    NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+                        NSColor(white: 0.12, alpha: 1).setFill(); NSRect(origin: .zero, size: size).fill()
+                        bolt.withSymbolConfiguration(.init(paletteColors: [.white]))?.draw(in: NSRect(x: 8, y: 5, width: 11, height: 14))
+                        s.draw(at: NSPoint(x: 20, y: (size.height - s.size().height) / 2))
+                    }
+                    NSGraphicsContext.restoreGraphicsState()
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
+                    exit(0)
                 }
             }
             return

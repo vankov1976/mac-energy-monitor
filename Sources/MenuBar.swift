@@ -336,7 +336,10 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         let bat = BatteryModel.shared
         // The battery after the watts (Macs with a battery), in the same menu bar item: icon with % and the time
         // left / until full, fixed width. The icon image is made only when the % or charging changes.
-        let batW = Self.batteryIconSize.width + ("  " + Self.batteryTime(nil) as NSString).size(withAttributes: [.font: font]).width + 8
+        // Room for the widest text it can show: a time ("12:34"), the calculating dots, "Full" or "Paused".
+        let batTextW = ([Self.batteryTime(nil), Self.batteryTime(36000), BT.menuFull, BT.menuPaused] as [NSString])
+            .map { ("  " + ($0 as String) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        let batW = Self.batteryIconSize.width + batTextW + 8
         let baseLength = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
         toggledObserver = NotificationCenter.default.addObserver(forName: Self.batteryToggled, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -364,12 +367,15 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             if showBattery, let b = bat.now {
                 bat.menuBarTick()                                       // same rhythm as the watts
                 let level = b.level.rounded(), charging = b.onCharger && !b.fullyCharged || b.charging
-                let time = Self.batteryTime(b.onCharger ? bat.secondsToFull : bat.secondsLeft, animate: true)
-                key += "|\(level)|\(charging)|" + time
-                if self.batteryImageKey != "\(level)|\(charging)" {
-                    self.batteryImageKey = "\(level)|\(charging)"
-                    self.batteryAttachment.image = Self.batteryImage(level: level, charging: charging)
-                    self.batteryAttachment.bounds = CGRect(x: 0, y: -3, width: Self.batteryIconSize.width, height: Self.batteryIconSize.height)
+                let full = b.onCharger && !b.charging && (b.fullyCharged || b.level >= 100)     // only a bolt inside
+                // On the charger but not charging: fully charged or charging paused, no time to show (no dots either).
+                let time = b.onCharger && !b.charging ? (b.fullyCharged || b.level >= 100 ? BT.menuFull : BT.menuPaused)
+                    : Self.batteryTime(b.onCharger ? bat.secondsToFull : bat.secondsLeft, animate: true)
+                key += "|\(level)|\(charging)|\(full)|" + time
+                if self.batteryImageKey != "\(level)|\(charging)|\(full)" {
+                    self.batteryImageKey = "\(level)|\(charging)|\(full)"
+                    self.batteryAttachment.image = Self.batteryImage(level: level, charging: charging, full: full)
+                    self.batteryAttachment.bounds = CGRect(x: 0, y: -4, width: Self.batteryIconSize.width, height: Self.batteryIconSize.height)
                 }
                 out.append(NSAttributedString(string: "  ", attributes: [.font: font]))
                 out.append(NSAttributedString(attachment: self.batteryAttachment))
@@ -381,7 +387,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             // VoiceOver can't read the battery picture: a spoken label for the whole item.
             var spoken = "Mac Energy Monitor, " + text.trimmingCharacters(in: .whitespaces)
             if showBattery, let b = bat.now {
-                let t = b.onCharger ? bat.secondsToFull.map(BT.untilFull) : bat.secondsLeft.map(BT.left)
+                let t = b.onCharger && !b.charging ? (b.fullyCharged || b.level >= 100 ? BT.fullyCharged : BT.pausedAt(b.level))
+                    : b.onCharger ? bat.secondsToFull.map(BT.untilFull) : bat.secondsLeft.map(BT.left)
                 spoken += ", " + String(localized: "battery \(BT.pct(b.level))") + (t.map { ", " + $0 } ?? "")
             }
             self.item.button?.setAccessibilityLabel(spoken)
@@ -401,7 +408,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     private var toggledObserver: Any?
     private let batteryAttachment = NSTextAttachment()
 
-    static let batteryIconSize = NSSize(width: 34, height: 15)
+    static let batteryIconSize = NSSize(width: 46, height: 17)
     static let batteryKey = "menuBarBattery"
 
     /// "4:36", padded to the same width; while still calculating, dots that build up with each update (·, ··, ···).
@@ -417,7 +424,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     /// The battery for the menu bar (monochrome): outline, fill with the charge, % inside, ⚡ while charging.
-    static func batteryImage(level: Double, charging: Bool) -> NSImage {
+    static func batteryImage(level: Double, charging: Bool, full: Bool = false) -> NSImage {
         let size = batteryIconSize
         return NSImage(size: size, flipped: false) { r in
             let body = NSRect(x: 0.5, y: 0.5, width: r.width - 4, height: r.height - 1)
@@ -429,10 +436,24 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             tint.setFill()
             NSBezierPath(roundedRect: NSRect(x: 2, y: 2, width: max(1.5, (body.width - 3) * min(1, level / 100)), height: body.height - 3),
                          xRadius: 2, yRadius: 2).fill()
-            let label = (charging ? "⚡︎" : "") + "\(Int(level))%"
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9, weight: .semibold), .foregroundColor: NSColor.labelColor]
+            // Fully charged: only a bolt inside (the text after the icon says "Full"), the same symbol as in the window.
+            if full, let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .bold).applying(.init(paletteColors: [.labelColor]))) {
+                bolt.draw(in: NSRect(x: body.midX - bolt.size.width / 2, y: body.midY - bolt.size.height / 2,
+                                     width: bolt.size.width, height: bolt.size.height))
+                return true
+            }
+            // Charging: the bolt at the left edge, the % centred in the rest (a little gap between them).
+            var area = body.insetBy(dx: 2, dy: 0)
+            if charging, let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 8, weight: .bold).applying(.init(paletteColors: [.labelColor]))) {
+                bolt.draw(in: NSRect(x: body.minX + 3, y: body.midY - bolt.size.height / 2, width: bolt.size.width, height: bolt.size.height))
+                area = NSRect(x: body.minX + 3 + bolt.size.width + 2, y: body.minY, width: body.maxX - 2 - (body.minX + 3 + bolt.size.width + 2), height: body.height)
+            }
+            let label = "\(Int(level))%"
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: NSColor.labelColor]
             let ts = (label as NSString).size(withAttributes: attrs)
-            (label as NSString).draw(at: NSPoint(x: body.midX - ts.width / 2, y: body.midY - ts.height / 2), withAttributes: attrs)
+            (label as NSString).draw(at: NSPoint(x: area.midX - ts.width / 2, y: body.midY - ts.height / 2), withAttributes: attrs)
             return true
         }
     }

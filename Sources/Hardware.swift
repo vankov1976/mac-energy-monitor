@@ -452,3 +452,35 @@ enum TestSwitch {
     /// "nopause": keep live sampling while the window is hidden (for memory tests with the screen locked).
     static let noPause = flags.contains("nopause")
 }
+
+/// Layout check of the test build (`--windowshot` with MEM_SHOT_CHECK): views report where they were drawn, and
+/// the check fails when one of them lies (partly) outside the window. In the normal build this does nothing.
+@MainActor enum LayoutProbe {
+    static var frames: [String: CGRect] = [:]
+}
+extension View {
+    func layoutProbe(_ name: String) -> some View {
+        #if DIAGNOSTICS
+        onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { LayoutProbe.frames[name] = $0 }
+            .onDisappear { LayoutProbe.frames[name] = nil }
+        #else
+        self
+        #endif
+    }
+}
+
+/// Gives its content exactly `height` (so tables and charts fill it), or more when the content can't shrink that
+/// far: then it is taller, and the ScrollView around it scrolls.
+struct FillOrGrow: Layout {
+    let height: CGFloat
+    private func need(_ w: CGFloat?, _ subviews: Subviews) -> CGFloat {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: w, height: height)).height }.max() ?? 0
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0,
+               height: { $0 > height + 1 ? $0 : height }(need(proposal.width, subviews)))   // rounding: no 1-pt scrolling
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for s in subviews { s.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height)) }
+    }
+}

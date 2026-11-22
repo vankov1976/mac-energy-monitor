@@ -776,7 +776,7 @@ enum SleepAnalysis {
             h.append("\(unusual.count) sleep\(unusual.count == 1 ? "" : "s") used more than twice this Mac's usual sleep power (marked with a blue «⚠|» below). Look at the wake-ups and \"Didn't sleep\" for that time.")
         }
         for n in r.noSleep.sorted(by: { ($0.wh ?? 0) > ($1.wh ?? 0) }).prefix(3) {
-            let span = n.start.formatted(.dateTime.day().month(.abbreviated).hour().minute()) + "–" + n.end.formatted(.dateTime.hour().minute())
+            let span = Clock.dayTime(n.start) + "–" + Clock.time(n.end)
             let when = span + ", with the " + (n.cause == "Lid closed" ? "lid closed" : "display off")
             let dur = n.hours >= 1 ? String(format: "%.1f h", locale: .current, n.hours) : "\(Int(n.hours * 60)) min"
             let who = n.blockers.first.map { b in

@@ -62,8 +62,8 @@ struct LivePowerView: View {
                     .foregroundStyle(.green)
             }
             .chartXScale(domain: Date().addingTimeInterval(-live.window)...Date())
-            .chartXAxis { AxisMarks(values: .stride(by: .minute)) { _ in
-                AxisGridLine(); AxisValueLabel(format: .dateTime.hour().minute())
+            .chartXAxis { AxisMarks(values: .stride(by: .minute)) { v in
+                AxisGridLine(); AxisValueLabel { if let d = v.as(Date.self) { Text(Clock.time(d)) } }
             } }
             .chartYAxis { AxisMarks(position: .leading) { v in
                 AxisGridLine(); AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d)) W") } }

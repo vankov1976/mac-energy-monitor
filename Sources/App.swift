@@ -117,47 +117,23 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             UpdateBanner()
-            controls
-            if batteryOn {
-                BatteryView()     // ignores the selected time frame
-            } else if preset == .custom { customRow }
-            if batteryOn {
-            } else if preset == .live {
-                LivePowerView()
-                LiveTableView(search: search, kind: $kind)
-            } else if sleepOnly {
-                // Sleep only: the same periods, with the sleep analysis instead of the breakdown and the apps.
-                if let r = model.report {
-                    if let sr = sleepModel.report(from: r.start, to: r.end) {
-                        sleepCards(sr, r)
-                        SleepSectionsView(report: sr, periodStart: r.start, power: $sleepPower, minEnergy: $sleepMinEnergy)
-                    } else {
-                        ProgressView("Reading macOS's sleep log…").frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else {
-                    ProgressView("Reading macOS's sleep log…").frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                if let r = model.report {
-                    cards(r)
-                    BreakdownStrip(breakdown: r.hardware, unit: "Wh", hours: r.coveredHours)
-                        // "Sleep only" keeps its hints at most this tall.
-                        .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { breakdownHeight = $0 }
-                    if !r.missingDays.isEmpty {
-                        Label("No data for these days: \(Self.dayRanges(r.missingDays)) — macOS's own power logs on this Mac start on \(r.macOSLogsStart.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "—"), and Mac Energy Monitor has no saved summary for these days (it can save a day only while macOS still has that day's logs). These days are left out of all figures; averages use only the \(Self.duration(r.coveredHours)) with data.", systemImage: "calendar.badge.exclamationmark")
-                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                    }
-                    // Only worth mentioning when the not-yet-split minutes are a noticeable part of the period.
-                    if let e = r.estimatedFrom, r.end.timeIntervalSince(e) > 0.1 * r.end.timeIntervalSince(r.start) {
-                        Label("The last \(Self.duration(r.end.timeIntervalSince(e) / 3600)) (since \(e.formatted(date: .omitted, time: .shortened))) aren't split into parts by macOS yet — it writes the CPU, GPU, memory and per-app split only about every 30 minutes, while the whole-Mac total is logged every minute. For these minutes the total is measured and the split follows the proportions of the time just before.", systemImage: "clock.badge.questionmark")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            controls.layoutProbe("top controls")
+            if !batteryOn && preset == .custom { customRow }
+            // The view's content gets all the height between the controls and the footer; when it can't shrink
+            // that far (small window), it scrolls instead of being cut off. Controls and footer always stay visible.
+            GeometryReader { g in
+                ScrollView(.vertical) {
+                    FillOrGrow(height: g.size.height) {
+                        VStack(alignment: .leading, spacing: 10) { content }
+                            .layoutProbe("content")
                     }
                 }
-                if model.report != nil { filters }    // no filters while the period is being read
-                table
+                .scrollBounceBehavior(.basedOnSize)
             }
-if preset != .live || batteryOn {
+            .layoutProbe("content area")
+            if preset != .live || batteryOn {
                 InfoNote(sections: batteryOn ? Explanations.battery : sleepOnly ? Explanations.sleep : Explanations.history)
+                    .layoutProbe("footer")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)   // same position in every view
@@ -221,10 +197,50 @@ if preset != .live || batteryOn {
         .onChange(of: appearance) { _, a in a.apply() }
     }
 
+    /// The selected view between the controls and the footer.
+    @ViewBuilder private var content: some View {
+            if batteryOn {
+                BatteryView()     // ignores the selected time frame
+            } else if preset == .live {
+                LivePowerView()
+                LiveTableView(search: search, kind: $kind)
+            } else if sleepOnly {
+                // Sleep only: the same periods, with the sleep analysis instead of the breakdown and the apps.
+                if let r = model.report {
+                    if let sr = sleepModel.report(from: r.start, to: r.end) {
+                        sleepCards(sr, r)
+                        SleepSectionsView(report: sr, periodStart: r.start, power: $sleepPower, minEnergy: $sleepMinEnergy)
+                    } else {
+                        ProgressView("Reading macOS's sleep log…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    ProgressView("Reading macOS's sleep log…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                if let r = model.report {
+                    cards(r)
+                    BreakdownStrip(breakdown: r.hardware, unit: "Wh", hours: r.coveredHours)
+                        // "Sleep only" keeps its hints at most this tall.
+                        .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { breakdownHeight = $0 }
+                    if !r.missingDays.isEmpty {
+                        Label("No data for these days: \(Self.dayRanges(r.missingDays)) — macOS's own power logs on this Mac start on \(r.macOSLogsStart.map(Clock.dateTime) ?? "—"), and Mac Energy Monitor has no saved summary for these days (it can save a day only while macOS still has that day's logs). These days are left out of all figures; averages use only the \(Self.duration(r.coveredHours)) with data.", systemImage: "calendar.badge.exclamationmark")
+                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    }
+                    // Only worth mentioning when the not-yet-split minutes are a noticeable part of the period.
+                    if let e = r.estimatedFrom, r.end.timeIntervalSince(e) > 0.1 * r.end.timeIntervalSince(r.start) {
+                        Label("The last \(Self.duration(r.end.timeIntervalSince(e) / 3600)) (since \(Clock.time(e))) aren't split into parts by macOS yet — it writes the CPU, GPU, memory and per-app split only about every 30 minutes, while the whole-Mac total is logged every minute. For these minutes the total is measured and the split follows the proportions of the time just before.", systemImage: "clock.badge.questionmark")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if model.report != nil { filters }    // no filters while the period is being read
+                table
+            }
+    }
+
     // MARK: sections
 
     private var controls: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .center, spacing: 10) {
             if !batteryOn {
             Picker("Time frame", selection: $preset) {
                 ForEach(Preset.allCases) { p in
@@ -249,7 +265,7 @@ if preset != .live || batteryOn {
                 .help("Show only the time the Mac was asleep: its energy, every wake-up and why, and times it didn't sleep")
             }
             }
-            Spacer()
+            Spacer(minLength: 0)     // the row has to fit the smallest window (940 pt)
             BatteryButton(isOn: $batteryOn)     // always just left of "Start at login"
             StartAtLoginToggle()
             // Quit, like in the menu bar panel (closing the window keeps the app in the menu bar).
@@ -460,9 +476,8 @@ if preset != .live || batteryOn {
         let cal = Calendar.current
         let thisYear = cal.isDate(a, equalTo: Date(), toGranularity: .year) && cal.isDate(b, equalTo: Date(), toGranularity: .year)
         let day = thisYear ? Date.FormatStyle().day().month(.abbreviated) : Date.FormatStyle().day().month(.abbreviated).year()
-        let time = Date.FormatStyle().hour().minute()
-        if cal.isDate(a, inSameDayAs: b) { return "\(a.formatted(day)), \(a.formatted(time)) – \(b.formatted(time))" }
-        return "\(a.formatted(day)) \(a.formatted(time)) – \(b.formatted(day)) \(b.formatted(time))"
+        if cal.isDate(a, inSameDayAs: b) { return "\(a.formatted(day)), \(Clock.time(a)) – \(Clock.time(b))" }
+        return "\(a.formatted(day)) \(Clock.time(a)) – \(b.formatted(day)) \(Clock.time(b))"
     }
 
     /// "Live" with a small red dot in front. Segmented buttons draw symbols in grey only, so dot and text are

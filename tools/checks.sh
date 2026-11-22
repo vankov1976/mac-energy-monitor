@@ -24,4 +24,5 @@ run sleep "$B" --sleepcheck 7
 run battery "$B" --batterycheck
 run charges "$B" --chargecheck
 run sleepcompare "$B" --sleepcompare
+echo "== layout (smallest window)"; tools/layoutcheck.sh "$B" 2>&1 | grep -v "^screenshots"
 echo "== gap"; tools/gaptest.sh 2>&1 | tail -3

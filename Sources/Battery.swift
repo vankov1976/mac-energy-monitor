@@ -94,7 +94,22 @@ struct BatteryNow {
             powerIn: mW("SystemPowerIn"),
             adapterName: a["Name"] as? String ?? a["Description"] as? String,
             adapterMaxW: n("Watts", in: a)?.doubleValue)
-            .withPowerController()
+            .withPowerController().faked()
+    }
+
+    /// Test build: MEM_FAKE_BATTERY=full|paused shows that state (for screenshots); otherwise unchanged.
+    private func faked() -> BatteryNow {
+        #if DIAGNOSTICS
+        var b = self
+        switch ProcessInfo.processInfo.environment["MEM_FAKE_BATTERY"] {
+        case "full": b.level = 100; b.onCharger = true; b.charging = false; b.fullyCharged = true
+        case "paused": b.level = 80; b.onCharger = true; b.charging = false; b.fullyCharged = false
+        default: break
+        }
+        return b
+        #else
+        return self
+        #endif
     }
 
     /// Whole-Mac power (PSTR) and charger input (PDTR) from the power controller: every second, unlike the battery record.
