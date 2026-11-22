@@ -61,16 +61,28 @@ struct SleepEnergy {
     }
 
     /// Energy of one sleep (from closing the lid until you wake the Mac), the part [x, y] of it. The same rule in
-    /// the history views and in "Sleep only": on battery, the battery's own charge drop over the whole sleep
-    /// (shared out by time), because on some Macs (MacBook Air M1) macOS's counter counts far too little while
-    /// asleep; otherwise the whole-Mac counter; failing that, the battery after all.
+    /// the history views and in "Sleep only": on battery, the battery's own charge drop over the whole sleep,
+    /// because on some Macs (MacBook Air M1) macOS's counter counts far too little while asleep; otherwise the
+    /// whole-Mac counter over the whole sleep; failing that, the battery after all.
+    /// Always worked out for the WHOLE sleep and then shared out to the part (by the counter's energy in that part,
+    /// by time where it has none): so the parts of a sleep always add up to it, wherever a period cuts it. (A part
+    /// measured on its own could miss the counter's 90 % coverage while the whole sleep doesn't, and lose its energy.)
+    /// `counted`: the counter's energy between two times without the coverage rule (holes count as 0).
     static func sessionWh(full a: Double, _ b: Double, part x: Double, _ y: Double, onBattery: Bool?, battery bat: [Battery],
-                          counter: (Double, Double) -> Double?) -> Double? {
+                          counter: (Double, Double) -> Double?, counted: ((Double, Double) -> Double)? = nil) -> Double? {
         guard b > a, y > x else { return 0 }
-        let share = (y - x) / (b - a)
-        if onBattery == true, b - a >= 1800, let m = measured((a, b), bat) { return m * share }
-        if let c = counter(x, y) { return c }
-        return measured((a, b), bat).map { $0 * share }
+        var total: Double?
+        if onBattery == true, b - a >= 1800 { total = measured((a, b), bat) }
+        if total == nil { total = counter(a, b) }
+        if total == nil { total = measured((a, b), bat) }
+        guard let t = total else { return nil }
+        if x <= a && y >= b { return t }
+        var share = (min(y, b) - max(x, a)) / (b - a)
+        if let counted {
+            let all = counted(a, b)
+            if all > 0 { share = counted(max(x, a), min(y, b)) / all }
+        }
+        return t * share
     }
 
     /// Battery energy used during a gap, if the Mac was on battery before and after it.
@@ -140,7 +152,7 @@ struct SleepEnergy {
         var db: OpaquePointer?
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { sqlite3_close(db); return }
         var st: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st {
+        if sqlite3_prepare_v2(db, PowerLogClock.fix(sql), -1, &st, nil) == SQLITE_OK, let st {
             for (i, a) in args.enumerated() { sqlite3_bind_double(st, Int32(i + 1), a) }
             while sqlite3_step(st) == SQLITE_ROW { body(st) }
         }

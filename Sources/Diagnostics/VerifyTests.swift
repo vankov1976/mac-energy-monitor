@@ -128,7 +128,9 @@ enum VerifyTests {
                 check(awake <= s.end.timeIntervalSince(s.start) + 60, "wake-ups longer than their sleep at \(s.start)")
                 if let w = s.avgW { check(w >= 0 && w < 60, "implausible sleep power \(w) W at \(s.start)") }
             }
-            check(r.noSleep.allSatisfy { n in !ss.contains { $0.start < n.end && n.start < $0.end } }, "a didn't-sleep time overlaps a sleep")
+            for n in r.noSleep { for o in ss where o.start < n.end && n.start < o.end {
+                check(false, "a didn't-sleep time overlaps a sleep: \(n.start)–\(n.end) (\(n.cause)) vs sleep \(o.start)–\(o.end)")
+            } }
             check(abs(r.sleepH - ss.reduce(0) { $0 + $1.hours }) < 0.001, "sleep hours don't add up")
             // 1b. Power / Minimum energy filters: every part of the view counts only the matching sleeps.
             check(r.filtered(power: "All", minEnergy: 0).sessions.count == r.sessions.count, "no filter changes the report")
@@ -396,9 +398,11 @@ enum VerifyTests {
                 let n = min(cal.date(byAdding: .day, value: 1, to: d)!, now)
                 if let r = try? log.fullReport(from: d, to: n) {
                     let hw = r.hardware
-                    print(String(format: "%@  whole %7.2f Wh  awake %5.2f h  asleep %5.2f h  covered %5.2f h  missing %@  inLogs %@",
-                                 dayKey(d), hw.whole, hw.awakeH ?? -1, hw.sleepH ?? -1, r.coveredHours,
-                                 r.missingDays.isEmpty ? "-" : "yes", r.dataDays.contains(dayKey(d)) ? "yes" : "no"))
+                    let parts = (hw.awakeH ?? 0) + (hw.sleepH ?? 0) + (hw.unknownH ?? 0) + (hw.offH ?? 0)
+                    print(String(format: "%@  whole %7.2f Wh  awake %5.2f h  asleep %5.2f h  unknown %5.2f h  off %5.2f h  covered %5.2f h  missing %@  inLogs %@%@",
+                                 dayKey(d), hw.whole, hw.awakeH ?? -1, hw.sleepH ?? -1, hw.unknownH ?? -1, hw.offH ?? -1, r.coveredHours,
+                                 r.missingDays.isEmpty ? "-" : "yes", r.dataDays.contains(dayKey(d)) ? "yes" : "no",
+                                 parts > r.coveredHours + 0.05 ? String(format: "  <-- parts %.2f h > covered", parts) : ""))
                     if let l = try? log.report(from: d, to: n) {
                         print(String(format: "            logs only: whole %7.2f Wh  awake %5.2f h  asleep %5.2f h  total %@  segments-days %@",
                                      l.hardware.whole, l.hardware.awakeH ?? -1, l.hardware.sleepH ?? -1,

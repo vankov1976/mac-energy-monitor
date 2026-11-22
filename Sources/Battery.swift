@@ -514,7 +514,7 @@ enum BatteryLogQuery {
         var db: OpaquePointer?
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { sqlite3_close(db); return }
         var st: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st {
+        if sqlite3_prepare_v2(db, PowerLogClock.fix(sql), -1, &st, nil) == SQLITE_OK, let st {
             for (i, a) in args.enumerated() { sqlite3_bind_double(st, Int32(i + 1), a) }
             let n = sqlite3_column_count(st)
             while sqlite3_step(st) == SQLITE_ROW { body((0..<n).map { sqlite3_column_double(st, $0) }) }

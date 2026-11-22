@@ -21,7 +21,7 @@ enum GapTests {
         case "tzwrite": tzWrite(url)
         case "tzread": tzRead(url)
         default:
-            edgesAndMidDay(url); damagedFiles(url); daylightSaving(url); partlyCovered(url); appOff15Days(url)
+            edgesAndMidDay(url); damagedFiles(url); daylightSaving(url); partlyCovered(url); appOff15Days(url); overlappingDays(url)
         }
         print("gaptest \(phase): \(pass) passed, \(fail) failed")
         exit(fail == 0 ? 0 : 1)
@@ -90,6 +90,24 @@ enum GapTests {
         check(keys(r.missingDays) == ["2026-03-12"], "period inside one missing day")
         near(r.coveredHours, 0, "nothing covered inside a missing day")
         check(r.hardware.total == nil && r.rows.isEmpty, "no made-up numbers for a missing day")
+    }
+
+    /// A day saved in another time zone (here New York, by an older version) overlaps the next saved day:
+    /// the overlapping hours count once (from the newer summary), the hours no summary covers count as missing.
+    static func overlappingDays(_ dir: URL) {
+        print("- overlapping saved days (one saved in New York time)")
+        clear(dir)
+        var ny = Calendar(identifier: .gregorian); ny.timeZone = TimeZone(identifier: "America/New_York")!
+        var odd = day(date(2026, 3, 11, in: ny), 110, in: ny); odd.version = 11
+        let days = [day(date(2026, 3, 10), 100), odd, day(date(2026, 3, 12), 120), day(date(2026, 3, 13), 130)]
+        write(days, dir)
+        let from = date(2026, 3, 10), to = date(2026, 3, 14)
+        let overlap = max(0, odd.end - days[2].start), gap = max(0, odd.start - days[0].end)    // seconds
+        let r = try! fresh().fullReport(from: from, to: to)
+        near(r.hardware.total, 100 + 110 * (86400 - overlap) / 86400 + 120 + 130, "whole Mac: the overlap counts once")
+        near(r.hardware.unknownH, (4 * 86400 - gap) / 3600, "hours: every covered hour once")
+        near(r.coveredHours, (4 * 86400 - gap) / 3600, "covered hours: the uncovered gap is left out")
+        check((r.hardware.unknownH ?? 0) <= r.coveredHours + 0.05, "counted hours ≤ covered hours")
     }
 
     /// Damaged, truncated, empty and unrelated files are skipped (the day counts as missing), no crash.

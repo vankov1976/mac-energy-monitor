@@ -480,7 +480,7 @@ enum SleepAnalysis {
         r.detailsFrom = events.first?.t
         guard !events.isEmpty else { return r }
         let t1 = Date()
-        let counter = Counter(log, from: from.addingTimeInterval(-3 * 86400), to: to.addingTimeInterval(3600))
+        let counter = Counter(log, from: from.addingTimeInterval(-3 * 86400), to: to.addingTimeInterval(86400))   // readings past the end close a span that reaches into the period
         if ProcessInfo.processInfo.environment["MEM_LAP"] != nil { print("counter:", Date().timeIntervalSince(t1)) }
 
         // 1. Sleeps: from a real sleep (lid closed, idle, Apple menu) until you wake the Mac. Short wake-ups
@@ -570,7 +570,8 @@ enum SleepAnalysis {
         func energy(_ s: SleepReport.Session, _ x: Date, _ y: Date, _ bat: [SleepEnergy.Battery]) -> Double? {
             SleepEnergy.sessionWh(full: s.start.timeIntervalSince1970, s.end.timeIntervalSince1970,
                                   part: x.timeIntervalSince1970, y.timeIntervalSince1970, onBattery: s.onBattery, battery: bat,
-                                  counter: { counter.wh(Date(timeIntervalSince1970: $0), Date(timeIntervalSince1970: $1)) })
+                                  counter: { counter.wh(Date(timeIntervalSince1970: $0), Date(timeIntervalSince1970: $1)) },
+                                  counted: counter.counted)
         }
         for i in all.indices {
             let s = all[i]
@@ -609,7 +610,8 @@ enum SleepAnalysis {
 
         // 3. Didn't sleep: the lid closed, or the display off for a long time, while the Mac stayed awake.
         //    Its power source (for the Power filter): what the battery log says for most of that time.
-        r.noSleep = noSleep(log, events: events, counter: counter, from: from, to: to).map { n in
+        r.noSleep = noSleep(log, events: events, counter: counter, from: from, to: to,
+                            asleep: all.map { ($0.start, $0.end) }).map { n in
             var n = n
             let a = n.start.timeIntervalSince1970, b = n.end.timeIntervalSince1970
             let inside = bat.filter { $0.t >= a && $0.t <= b }
@@ -623,7 +625,7 @@ enum SleepAnalysis {
     }
 
     private static func noSleep(_ log: PowerLog, events: [PMSetLog.Event], counter: Counter,
-                                from: Date, to: Date) -> [SleepReport.NoSleep] {
+                                from: Date, to: Date, asleep: [(Date, Date)]) -> [SleepReport.NoSleep] {
         let sleeps = events.compactMap { e -> Date? in if case .sleep = e.kind { return e.t }; return nil }
         let boots = events.compactMap { e -> Date? in if case .boot = e.kind { return e.t }; return nil }
         func next(_ list: [Date], after t: Date) -> Date? { list.first { $0 > t } }
@@ -711,6 +713,16 @@ enum SleepAnalysis {
             guard !out.contains(where: { $0.end > a && $0.start < b }) else { continue }
             let wh = counter.wh(a, b)
             if real(e.t, b, wh) { out.append(.init(start: a, end: b, cause: "Display off", blockers: blockers(a, b), wh: wh)) }
+        }
+        // Never inside a sleep: the power log can record the lid closing (or the display going off) while the Mac
+        // is already asleep (seen on a MacBook Air); such a time isn't "didn't sleep". One that runs into a sleep
+        // ends where that sleep starts.
+        let minSecs: [String: Double] = ["Lid closed": 600, "Display off": 1800]
+        out = out.compactMap { n in
+            guard !asleep.contains(where: { $0.0 <= n.start && n.start < $0.1 }) else { return nil }
+            guard let cut = asleep.map(\.0).filter({ $0 > n.start && $0 < n.end }).min() else { return n }
+            guard cut.timeIntervalSince(n.start) > (minSecs[n.cause] ?? 600) else { return nil }
+            return .init(start: n.start, end: cut, cause: n.cause, blockers: blockers(n.start, cut), wh: counter.wh(n.start, cut))
         }
         return out.sorted { $0.start < $1.start }
     }
@@ -838,6 +850,9 @@ enum SleepAnalysis {
             return (wh0 + spans[lo].w * o / 3600, s0 + o)
         }
 
+        /// Wh between two times without the coverage rule (time the counter doesn't cover counts as 0).
+        func counted(_ x: Double, _ y: Double) -> Double { y > x ? upTo(y).wh - upTo(x).wh : 0 }
+
         /// Wh between two times; nil if the counter doesn't cover at least 90% of it.
         func wh(_ x: Date, _ y: Date) -> Double? {
             let a = x.timeIntervalSince1970, b = y.timeIntervalSince1970
@@ -850,7 +865,7 @@ enum SleepAnalysis {
             var db: OpaquePointer?
             guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { sqlite3_close(db); return }
             var st: OpaquePointer?
-            if sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st {
+            if sqlite3_prepare_v2(db, PowerLogClock.fix(sql), -1, &st, nil) == SQLITE_OK, let st {
                 for (i, a) in args.enumerated() { sqlite3_bind_double(st, Int32(i + 1), a) }
                 while sqlite3_step(st) == SQLITE_ROW { body(st) }
             }

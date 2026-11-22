@@ -181,7 +181,7 @@ final class PowerLog: @unchecked Sendable {
                 sqlite3_close(db); continue
             }
             var st: OpaquePointer?
-            if sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st {
+            if sqlite3_prepare_v2(db, PowerLogClock.fix(sql), -1, &st, nil) == SQLITE_OK, let st {
                 for (i, a) in args.enumerated() { sqlite3_bind_double(st, Int32(i + 1), a) }
                 while sqlite3_step(st) == SQLITE_ROW {
                     if seen.insert(key(st)).inserted { body(st) }
@@ -226,7 +226,7 @@ final class PowerLog: @unchecked Sendable {
             for table in ["PLCoalitionAgent_EventInterval_CoalitionInterval", "PLBatteryAgent_EventBackward_Adapter",
                           "PLBatteryAgent_EventBackward_Battery", "PLIOReportAgent_EventBackward_EnergyModel"] {
                 var st: OpaquePointer?
-                if sqlite3_prepare_v2(db, "select min(timestamp), max(timestamp) from \(table)", -1, &st, nil) == SQLITE_OK,
+                if sqlite3_prepare_v2(db, PowerLogClock.fix("select min(timestamp), max(timestamp) from \(table)"), -1, &st, nil) == SQLITE_OK,
                    let st, sqlite3_step(st) == SQLITE_ROW, !isNull(st, 0) {
                     let x = (lo: dbl(st, 0), hi: dbl(st, 1))
                     if table.hasPrefix("PLCoalition") { r.coalition = x }
@@ -415,7 +415,7 @@ final class PowerLog: @unchecked Sendable {
         var db: OpaquePointer?
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { sqlite3_close(db); return }
         var st: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st {
+        if sqlite3_prepare_v2(db, PowerLogClock.fix(sql), -1, &st, nil) == SQLITE_OK, let st {
             for (i, a) in args.enumerated() { sqlite3_bind_double(st, Int32(i + 1), a) }
             while sqlite3_step(st) == SQLITE_ROW { body(st) }
         }
@@ -611,8 +611,10 @@ final class PowerLog: @unchecked Sendable {
             // sleep on battery is its whole charge drop, shared out by time (else a period ending mid-sleep loses it).
             let bat = SleepEnergy.battery(dbs, min(start, sessions.map(\.a).min() ?? start) - 3600,
                                           max(end, sessions.map(\.b).max() ?? end) + 3600)
+            // Readings up to a day past the end: the one that closes a counter span reaching into the period can be
+            // hours later (e.g. a long sleep that ends after the period). Without it that sleep part has no energy.
             let ctr = SleepAnalysis.Counter(self, from: Date(timeIntervalSince1970: start - 86400),
-                                            to: Date(timeIntervalSince1970: end + 3600))
+                                            to: Date(timeIntervalSince1970: end + 86400))
             var sessWh = 0.0, sessKnown = false, sessSecs = 0.0
             // Only the parts of sleeps on days with data (like awake time), so awake + asleep never exceed them.
             for sp in sessions {
@@ -628,10 +630,16 @@ final class PowerLog: @unchecked Sendable {
                 let whole = (x: max(sp.a, start), y: min(sp.b, hi))
                 if abs(secs - (whole.y - whole.x)) < 1 { pieces = [whole] }
                 for p in pieces {
-                    if let w = SleepEnergy.sessionWh(full: sp.a, sp.b, part: p.x, p.y, onBattery: sp.onBattery, battery: bat,
-                                                     counter: { ctr.wh(Date(timeIntervalSince1970: $0), Date(timeIntervalSince1970: $1)) }) {
-                        sessWh += w; sessKnown = true
+                    let w = SleepEnergy.sessionWh(full: sp.a, sp.b, part: p.x, p.y, onBattery: sp.onBattery, battery: bat,
+                                                  counter: { ctr.wh(Date(timeIntervalSince1970: $0), Date(timeIntervalSince1970: $1)) },
+                                                  counted: ctr.counted)
+                    #if DIAGNOSTICS
+                    if ProcessInfo.processInfo.environment["MEM_DEBUG_SLEEPWH"] != nil {
+                        print(String(format: "SLEEPWH %@ – %@ part %@ – %@ battery %@ → %@", "\(Date(timeIntervalSince1970: sp.a))", "\(Date(timeIntervalSince1970: sp.b))",
+                                     "\(Date(timeIntervalSince1970: p.x))", "\(Date(timeIntervalSince1970: p.y))", "\(sp.onBattery as Any)", w.map { String(format: "%.3f", $0) } ?? "nil"))
                     }
+                    #endif
+                    if let w { sessWh += w; sessKnown = true }
                 }
             }
             var outside: [(a: Double, b: Double)] = []          // the gaps minus the parts inside sleeps
@@ -920,5 +928,56 @@ final class PowerLog: @unchecked Sendable {
         }
         let short = id.split(separator: ".").last.map(String.init) ?? id
         return (short, id.hasPrefix("com.apple.") ? "System" : "Background", nil)
+    }
+}
+
+/// macOS's power log can run on a shifted clock: its own table PLStorageOperator_EventForward_TimeOffset says how far
+/// (column `system`: seconds to add to its timestamps for real time). Usually a few seconds; on a MacBook Air with a
+/// macOS beta it was about −1 h 56 min, which put every power value two hours away from the sleep log's events.
+/// Every query on the power log goes through `fix`: with an offset over a minute, `timestamp` / `timestampEnd`
+/// become real time, both in what the query selects and in its conditions. One offset for all log files (the
+/// current log's), so rows found in several files still match exactly when they are de-duplicated.
+enum PowerLogClock {
+    nonisolated(unsafe) private static var cached: (off: Double, at: Double)?
+    private static let lock = NSLock()
+
+    /// Seconds to add to the power log's timestamps (0 when under a minute).
+    static var offset: Double {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date().timeIntervalSince1970
+        if let c = cached, now - c.at < 600 { return c.off }
+        var off = 0.0
+        #if DIAGNOSTICS
+        if let s = ProcessInfo.processInfo.environment["MEM_LOG_OFFSET"], let v = Double(s) { cached = (v, now); return v }
+        #endif
+        var db: OpaquePointer?
+        if sqlite3_open_v2(PowerLog.logDir + "/CurrentPowerlog.PLSQL", &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
+            var st: OpaquePointer?
+            // The median of the recent rows (a single row can be a brief outlier).
+            if sqlite3_prepare_v2(db, "select system from PLStorageOperator_EventForward_TimeOffset where system is not null order by timestamp desc limit 15", -1, &st, nil) == SQLITE_OK, let st {
+                var v: [Double] = []
+                while sqlite3_step(st) == SQLITE_ROW { v.append(sqlite3_column_double(st, 0)) }
+                if !v.isEmpty { off = v.sorted()[v.count / 2] }
+            }
+            sqlite3_finalize(st)
+        }
+        sqlite3_close(db)
+        if abs(off) < 60 { off = 0 }
+        cached = (off, now)
+        return off
+    }
+
+    /// The query with real times. Conditions keep the log's own column, with the bound shifted
+    /// (`timestamp > ?` → `timestamp > (? - offset)`), so the log's index is still used; `order by` stays (a constant
+    /// shift keeps the order); every other `timestamp` / `timestampEnd` becomes `(timestamp + offset)`.
+    static func fix(_ sql: String) -> String {
+        let off = offset
+        guard off != 0 else { return sql }
+        let o = String(format: "%.3f", off)
+        var q = sql.replacingOccurrences(of: #"\btimestamp(End)?\s*(<=|>=|<|>|=)\s*\?"#, with: "§ts$1§ $2 (? - \(o))",
+                                         options: .regularExpression)
+        q = q.replacingOccurrences(of: #"order by timestamp(End)?\b"#, with: "order by §ts$1§", options: .regularExpression)
+        q = q.replacingOccurrences(of: #"\btimestamp(End)?\b"#, with: "(timestamp$1 + \(o))", options: .regularExpression)
+        return q.replacingOccurrences(of: #"§ts(End)?§"#, with: "timestamp$1", options: .regularExpression)
     }
 }

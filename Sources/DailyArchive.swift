@@ -73,6 +73,12 @@ final class DailyArchive: @unchecked Sendable {
     func saveMissingDays(using log: PowerLog, logRange: ClosedRange<Date>) {
         guard Date().timeIntervalSince(lastCheck) > 3600 else { return }
         lastCheck = Date()
+        #if DIAGNOSTICS
+        // A test run in another time zone (TZ=…) must never save days into the real history: they would be saved
+        // in that time zone and overlap the real days (as happened once on a test Mac). Use MEM_ARCHIVE_DIR.
+        let env = ProcessInfo.processInfo.environment
+        if env["TZ"] != nil && env["MEM_ARCHIVE_DIR"] == nil { return }
+        #endif
         // Days saved by an older version are computed again while macOS still has their logs.
         var saved: [String: Int] = [:]
         for d in days { saved[d.day] = d.version ?? 1 }
@@ -158,13 +164,31 @@ extension PowerLog {
         // in between. A day only partly inside the period counts proportionally; on the day the logs start,
         // only the part before their start comes from the saved summary.
         let a = from.timeIntervalSince1970, z = to.timeIntervalSince1970, ls = logStart.timeIntervalSince1970
-        for d in archive.days {
+        // Summaries saved in different time zones (travelling, or a day saved by an older version) can overlap:
+        // the same hours must never count twice. The newest summaries count first; an older one only for the
+        // time no other summary has counted yet.
+        var counted: [(Double, Double)] = []
+        func uncounted(_ x: Double, _ y: Double) -> Double {
+            var free = [(x, y)]
+            for c in counted {
+                free = free.flatMap { f -> [(Double, Double)] in
+                    guard c.0 < f.1 && f.0 < c.1 else { return [f] }
+                    return [(f.0, c.0), (c.1, f.1)].filter { $0.1 > $0.0 }
+                }
+            }
+            return free.reduce(0) { $0 + $1.1 - $1.0 }
+        }
+        let byPreference = archive.days.sorted { ($0.version ?? 1, $0.savedAt) > ($1.version ?? 1, $1.savedAt) }
+        for d in byPreference {
             // Days the logs have count from the logs. A summary saved in another time zone (e.g. while travelling)
             // spans two local days: if the logs have either of them, only its part before the logs' start counts.
             let inLogs = dataDays.contains(d.day) || dataDays.contains(dayKey(Date(timeIntervalSince1970: d.start)))
                 || dataDays.contains(dayKey(Date(timeIntervalSince1970: d.end - 1)))
             let upTo = inLogs ? min(d.end, ls) : d.end
-            let k = max(0, min(upTo, z) - max(d.start, a)) / (d.end - d.start)
+            let x = max(d.start, a), y = min(upTo, z)
+            guard y > x else { continue }
+            let k = uncounted(x, y) / (d.end - d.start)
+            counted.append((x, y))
             guard k > 0 else { continue }
             #if DIAGNOSTICS
             if ProcessInfo.processInfo.environment["MEM_SHOW_DAYS"] != nil {

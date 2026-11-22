@@ -339,7 +339,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         // Room for the widest text it can show: a time ("12:34"), the calculating dots, "Full" or "Paused".
         let batTextW = ([Self.batteryTime(nil), Self.batteryTime(36000), BT.menuFull, BT.menuPaused] as [NSString])
             .map { ("  " + ($0 as String) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        let batW = Self.batteryIconSize.width + batTextW + 8
+        let batW = Self.batteryIconSize.width + batTextW + 2
         let baseLength = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
         toggledObserver = NotificationCenter.default.addObserver(forName: Self.batteryToggled, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -380,6 +380,14 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
                 out.append(NSAttributedString(string: "  ", attributes: [.font: font]))
                 out.append(NSAttributedString(attachment: self.batteryAttachment))
                 out.append(NSAttributedString(string: " " + time, attributes: [.font: font]))
+                // macOS centres the item's content: a shorter text ("Full", "0:05") would leave its spare room half on
+                // the left. An empty gap after the text keeps it as wide as the widest, so everything stays left.
+                let pad = batTextW - ("  " + time as NSString).size(withAttributes: [.font: font]).width
+                if pad > 0.5 {
+                    let gap = NSTextAttachment(); gap.image = NSImage(size: NSSize(width: pad, height: 1))
+                    gap.bounds = CGRect(x: 0, y: 0, width: pad, height: 1)
+                    out.append(NSAttributedString(attachment: gap))
+                }
             }
             guard key != self.lastTitle else { return }                // redraw the menu bar only when it changes
             self.lastTitle = key
