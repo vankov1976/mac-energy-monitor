@@ -41,6 +41,9 @@ enum FriendlyNames {
     static func reason(_ r: String) -> String {
         let l = r.lowercased()
         if l.hasPrefix("aborted "), let n = l.split(separator: " ").dropFirst().first { return "Slept and woke again \(n)× in a row" }
+        if l.contains("wifibt") && l.contains("hid") { return "Bluetooth keyboard, mouse or trackpad" }
+        if l.contains("wifibt") && l.contains("useractivity") { return "Bluetooth device with user activity (keyboard, mouse, Apple Watch)" }
+        if l.contains("wifibt") && l.contains("bluetooth") { return "Bluetooth" }
         if l.contains("wifibt") || l.contains("wlan") { return "Wi-Fi or Bluetooth (network, nearby devices)" }
         if l.contains("rtc") && l.contains("sleepservice") { return "Timer: Sleep Services (iCloud, Find My, mail)" }
         if l.contains("rtc") || l.contains("maintenance") { return "Timer: maintenance (Power Nap, backups, sync)" }
@@ -160,6 +163,16 @@ enum Explain {
                     + "Something kept signalling activity, here the lid sensor or a keyboard/trackpad signal, e.g. with the lid open while the Mac went to idle sleep.", [])
         }
         let fully = " The Mac didn't wake fully (the display stayed off) and went back to sleep. Opening the lid and using the Mac ends the sleep: that isn't a wake-up during it and isn't counted here."
+        let background = " The Mac didn't wake fully (the display stayed off) and went back to sleep."
+        if l.contains("wifibt") && l.contains("hid") {
+            return ("Input from a Bluetooth keyboard, mouse or trackpad woke the Mac in the background." + background, [])
+        }
+        if l.contains("wifibt") && l.contains("useractivity") {
+            return ("A Bluetooth device signalled user activity and woke the Mac in the background, e.g. a keyboard or mouse, or an Apple Watch nearby." + background, [])
+        }
+        if l.contains("wifibt") && l.contains("bluetooth") {
+            return ("The Bluetooth part of the Wi-Fi/Bluetooth chip woke the Mac: a paired device nearby (keyboard, mouse, headphones, Apple Watch).", [])
+        }
         if l.contains("wifibt") || l.contains("wlan") {
             return ("The Wi-Fi and Bluetooth chip woke the Mac. macOS doesn't say which of the two:",
                     ["network activity: iCloud, Find My, other devices reaching this Mac",

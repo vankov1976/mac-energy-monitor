@@ -30,9 +30,11 @@ enum WakeGroup: String, CaseIterable, Identifiable {
     /// Reason codes differ between Mac models; anything unknown goes to Other with its original text.
     static func of(_ reason: String) -> WakeGroup {
         let r = reason.lowercased()
+        // By the chip that woke the Mac first: "wifibt UserActivity Assertion" or "wifibt HID Activity" is the
+        // Wi-Fi/Bluetooth chip (e.g. a Bluetooth keyboard or an Apple Watch), not the lid or the built-in keyboard.
+        if ["wifibt", "wlan", "network", "bluetooth", "bt."].contains(where: r.contains) { return .network }
         if ["lid", "hid activity", "trackpadkeyboard", "useractivity", "pwrbtn", "power button", "keyboard"]
             .contains(where: r.contains) { return .user }
-        if ["wifibt", "wlan", "network", "bluetooth", "bt."].contains(where: r.contains) { return .network }
         if ["rtc", "maintenance"].contains(where: r.contains) { return .scheduled }
         if ["usb-c_plug", "usb-c", "ac attach", "charger", "adapter"].contains(where: r.contains) { return .power }
         return .other
