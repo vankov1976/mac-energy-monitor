@@ -325,9 +325,11 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         if popover.responds(to: NSSelectorFromString("setShouldHideAnchor:")) { popover.setValue(true, forKey: "shouldHideAnchor") }
         popover.appearance = NSAppearance(named: .darkAqua)   // the menu bar panel is always dark
         popover.delegate = self
-        // The panel's content is made when it opens and removed when it closes (popoverDidClose): a hidden panel
-        // would otherwise keep its views and the battery button's 1-second timer running (measured: about 7 % CPU
-        // with everything closed).
+        // One container for the panel; its content is the real panel only while it is open, an empty view while
+        // closed (popoverDidClose). A hidden panel would otherwise keep its views and the battery button's 1-second
+        // timer running (measured: about 7 % CPU with everything closed). Swapping the content (instead of making a
+        // new container each time) lets SwiftUI remove the old views properly: no invisible copies stay behind.
+        popover.contentViewController = panelHost
         // Fixed width: digits all have the same width and the text always has the same number of characters.
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         // The battery after the watts (Macs with a battery): icon with % and the time left / until full, fixed width.
@@ -401,13 +403,20 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
 
     func popoverDidClose(_ notification: Notification) {
         LiveBreakdown.shared.stop(); model.visible = false
-        popover.contentViewController = nil          // its views and timers stop (see where the panel is made)
+        panelHost.rootView = AnyView(EmptyView())   // its views and timers stop (see where the panel is made)
         if let m = outsideClicks { NSEvent.removeMonitor(m); outsideClicks = nil }
         lastTitle = ""                     // redraw (and apply a changed width) at the next update
     }
     /// Clicks outside the panel close it, also on an empty spot of the menu bar (which the popover's own
     /// "transient" closing doesn't see).
     private var outsideClicks: Any?
+    private let panelHost: NSHostingController<AnyView> = {
+        let h = NSHostingController(rootView: AnyView(EmptyView()))
+        // No size reporting on every update: measuring the whole panel again at each live reading (every second)
+        // was most of its processor time (sampled: ~23 % of a core while open). Its size is set once when it opens.
+        h.sizingOptions = []
+        return h
+    }()
     private var lastTitle = "", batteryImageKey = ""
     static let batteryToggled = Notification.Name("menuBarBatteryToggled")
     private var toggledObserver: Any?
@@ -477,9 +486,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             model.visible = true
             model.refresh()
             LiveBreakdown.shared.start()
-            popover.contentViewController = NSHostingController(rootView: MenuBarView(model: model, close: { [weak self] in
-                self?.popover.performClose(nil)
-            }))
+            panelHost.rootView = AnyView(MenuBarView(model: model, close: { [weak self] in self?.popover.performClose(nil) }))
+            popover.contentSize = panelHost.view.fittingSize
             popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
             if outsideClicks == nil {
                 outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
