@@ -325,9 +325,9 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         if popover.responds(to: NSSelectorFromString("setShouldHideAnchor:")) { popover.setValue(true, forKey: "shouldHideAnchor") }
         popover.appearance = NSAppearance(named: .darkAqua)   // the menu bar panel is always dark
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: MenuBarView(model: model, close: { [weak self] in
-            self?.popover.performClose(nil)
-        }))
+        // The panel's content is made when it opens and removed when it closes (popoverDidClose): a hidden panel
+        // would otherwise keep its views and the battery button's 1-second timer running (measured: about 7 % CPU
+        // with everything closed).
         // Fixed width: digits all have the same width and the text always has the same number of characters.
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         // The battery after the watts (Macs with a battery): icon with % and the time left / until full, fixed width.
@@ -401,6 +401,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
 
     func popoverDidClose(_ notification: Notification) {
         LiveBreakdown.shared.stop(); model.visible = false
+        popover.contentViewController = nil          // its views and timers stop (see where the panel is made)
         if let m = outsideClicks { NSEvent.removeMonitor(m); outsideClicks = nil }
         lastTitle = ""                     // redraw (and apply a changed width) at the next update
     }
@@ -476,6 +477,9 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             model.visible = true
             model.refresh()
             LiveBreakdown.shared.start()
+            popover.contentViewController = NSHostingController(rootView: MenuBarView(model: model, close: { [weak self] in
+                self?.popover.performClose(nil)
+            }))
             popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
             if outsideClicks == nil {
                 outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
