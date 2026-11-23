@@ -40,12 +40,13 @@ enum FriendlyNames {
     /// A wake reason from macOS (e.g. "wifibt", "rtc Maintenance", "lid HID Activity").
     static func reason(_ r: String) -> String {
         let l = r.lowercased()
+        if l.hasPrefix("aborted "), let n = l.split(separator: " ").dropFirst().first { return "Slept and woke again \(n)× in a row" }
         if l.contains("wifibt") || l.contains("wlan") { return "Wi-Fi or Bluetooth (network, nearby devices)" }
         if l.contains("rtc") && l.contains("sleepservice") { return "Timer: Sleep Services (iCloud, Find My, mail)" }
         if l.contains("rtc") || l.contains("maintenance") { return "Timer: maintenance (Power Nap, backups, sync)" }
-        if l.contains("lid") { return "Lid opened" }
+        if l.contains("lid") { return "Lid sensor" }
         if l.contains("trackpadkeyboard") || l.contains("keyboard") { return "Keyboard or trackpad" }
-        if l.contains("hid activity") || l.contains("useractivity") { return "You used the Mac" }
+        if l.contains("hid activity") || l.contains("useractivity") { return "Activity signal (keyboard, trackpad, mouse)" }
         if l.contains("usb-c") || l.contains("charger") || l.contains("adapter") { return "Charger plugged in or out" }
         if l.contains("pwrbtn") || l.contains("power button") { return "Power button" }
         if l.contains("notification") { return "Notification" }
@@ -154,6 +155,11 @@ enum Explain {
     /// A wake reason from macOS.
     static func reason(_ r: String) -> (String, [String]) {
         let l = r.lowercased()
+        if l.hasPrefix("aborted ") {
+            return ("macOS started to sleep, aborted it at once and tried again, several times within seconds (counted as one wake-up). "
+                    + "Something kept signalling activity, here the lid sensor or a keyboard/trackpad signal, e.g. with the lid open while the Mac went to idle sleep.", [])
+        }
+        let fully = " The Mac didn't wake fully (the display stayed off) and went back to sleep. Opening the lid and using the Mac ends the sleep: that isn't a wake-up during it and isn't counted here."
         if l.contains("wifibt") || l.contains("wlan") {
             return ("The Wi-Fi and Bluetooth chip woke the Mac. macOS doesn't say which of the two:",
                     ["network activity: iCloud, Find My, other devices reaching this Mac",
@@ -167,10 +173,12 @@ enum Explain {
             return ("The Mac's built-in clock woke it for planned maintenance:",
                     ["Power Nap checks", "backups (e.g. Time Machine), updates and sync"])
         }
-        if l.contains("lid") { return ("You opened the lid.", []) }
+        if l.contains("lid") { return ("A signal from the lid sensor woke the Mac in the background." + fully, []) }
         if l.contains("usb-c") || l.contains("charger") || l.contains("adapter") { return ("The charger was plugged in or out.", []) }
         if l.contains("pwrbtn") || l.contains("power button") { return ("The power button was pressed.", []) }
-        if l.contains("hid") || l.contains("keyboard") || l.contains("useractivity") { return ("You used the keyboard, trackpad or mouse.", []) }
+        if l.contains("hid") || l.contains("keyboard") || l.contains("useractivity") {
+            return ("A keyboard, trackpad or mouse signal woke the Mac in the background." + fully, [])
+        }
         return ("macOS woke the Mac for this reason.", [])
     }
 

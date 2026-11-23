@@ -16,10 +16,13 @@ struct SleepSpan { let a: Double, b: Double, onBattery: Bool? }
 
 /// Why the Mac woke up, grouped for people.
 enum WakeGroup: String, CaseIterable, Identifiable {
-    case user = "You (lid, keyboard, trackpad)"
+    // Only background wake-ups are listed: you opening the lid and using the Mac ends the sleep (not a wake-up
+    // during it). So these are signals from the lid sensor, keyboard or trackpad that didn't wake the Mac fully.
+    case user = "Lid, keyboard or trackpad signal (didn't wake fully)"
     case network = "Wi-Fi or Bluetooth (network, nearby devices)"
     case scheduled = "Timer set by macOS (Power Nap, maintenance)"
     case power = "Power adapter"
+    case aborted = "Sleep aborted by macOS and retried"
     case other = "Other"
     var id: String { rawValue }
 
@@ -529,7 +532,10 @@ enum SleepAnalysis {
                     switch events[j].kind { case .sleep, .boot: return true; case .wake: return !briefWakes.contains(j); default: return false }
                 }.map { events[$0].t }
                 let secs = min(next.map { $0.timeIntervalSince(e.t) } ?? 0, dark ? 3600 : 0)
-                let req = requests.first { abs($0.at.timeIntervalSince(e.t)) <= 90 }
+                // A planned wake-up request is the cause only of a wake by the built-in clock (rtc); a wake by the lid,
+                // the network or the power adapter merely happened near a planned time (powerd re-plans its alarm
+                // every few minutes), so it gets none.
+                let req = WakeGroup.of(reason) == .scheduled ? requests.first { abs($0.at.timeIntervalSince(e.t)) <= 90 } : nil
                 // A background wake-up in the same moment as the full wake is the start of you waking the Mac.
                 let partOfFullWake = dark && events.indices.dropFirst(i + 1).prefix(8).contains { j in
                     if case .wake = events[j].kind, !briefWakes.contains(j) { return events[j].t.timeIntervalSince(e.t) <= 2 }; return false
@@ -564,6 +570,25 @@ enum SleepAnalysis {
             all.append(.init(start: o.start, end: lastEvent, cause: o.cause, onBattery: o.battery,
                              wh: counter.wh(o.start, lastEvent), wakes: o.wakes))
         }
+
+        // A sleep that macOS aborts at once and retries, again and again within seconds (seen: idle sleep with the
+        // lid open, 10 tries in a minute, each logged as a background wake-up "lid … UserActivity"): one entry.
+        var merged: [SleepReport.Wake] = []
+        var k = 0
+        while k < wakes.count {
+            var j = k
+            while j + 1 < wakes.count, wakes[j].dark, wakes[j + 1].dark, wakes[j].group == .user, wakes[j + 1].group == .user,
+                  wakes[j + 1].time.timeIntervalSince(wakes[j].time.addingTimeInterval(wakes[j].secs)) <= 15 { j += 1 }
+            let run = wakes[k...j]
+            if run.count >= 3, let f = run.first {
+                let whs = run.compactMap(\.wh)
+                merged.append(.init(time: f.time, dark: true, group: .aborted, reason: "aborted \(run.count) \(f.reason)",
+                                    requester: nil, secs: run.reduce(0) { $0 + $1.secs },
+                                    wh: whs.count == run.count ? whs.reduce(0, +) : nil))
+            } else { merged.append(contentsOf: run) }
+            k = j + 1
+        }
+        wakes = merged
 
         let batAll = SleepEnergy.battery((try? log.databases()) ?? [], (all.first?.start.timeIntervalSince1970 ?? 0) - 900,
                                          (all.last?.end.timeIntervalSince1970 ?? 0) + 900)

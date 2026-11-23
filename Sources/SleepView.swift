@@ -249,7 +249,8 @@ struct SleepSectionsView: View {
                 TableColumn("Wake-ups", value: \.wakes) { s in wakesLink(s).frame(maxWidth: .infinity, alignment: .trailing) }
                     .width(84)
                 TableColumn("Energy", value: \.whSort) { s in
-                    tinted(s, Text(s.wh.map { fmt($0, 2) + " Wh" } ?? "—")).frame(maxWidth: .infinity, alignment: .trailing)
+                    Text(s.wh.map { fmt($0, 2) + " Wh" } ?? "unknown").foregroundStyle(Color.tip)
+                        .tip(energyTip(s)).frame(maxWidth: .infinity, alignment: .trailing)
                 }.width(85)
                 TableColumn("Avg. power", value: \.avgSort) { s in
                     HStack(spacing: 3) {
@@ -257,7 +258,8 @@ struct SleepSectionsView: View {
                             Image(systemName: "exclamationmark.triangle").foregroundStyle(Color.tip)
                                 .tip("More than twice this Mac's usual sleep power on \(s.onBattery == true ? "battery" : "the charger")")
                         }
-                        tinted(s, Text(s.avgW.map { fmt($0, 2) + " W" } ?? "—"))
+                        if s.avgW == nil { Text("unknown").foregroundStyle(Color.tip).tip(energyTip(s)) }
+                        else { tinted(s, Text(s.avgW.map { fmt($0, 2) + " W" } ?? "")) }
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }.width(95)
@@ -271,6 +273,22 @@ struct SleepSectionsView: View {
             }
             .monospacedDigit()
         }
+    }
+
+    /// Tooltip of a sleep's energy: the whole sleep = its wake-ups (the seconds it was awake) + the time asleep in
+    /// between. That's why the wake-ups' energy (shown when you click the number) is less than the sleep's.
+    private func energyTip(_ s: SleepReport.Session) -> String {
+        let w = report.wakes.filter { $0.time >= s.start && $0.time < s.end }
+        let wWh = w.compactMap(\.wh).reduce(0, +), awake = ContentView.duration(w.reduce(0) { $0 + $1.secs } / 3600)
+        let n = w.count == 1 ? "1 wake-up" : "\(w.count) wake-ups"
+        guard let wh = s.wh else {
+            return "Energy of the whole sleep unknown: macOS's logs don't cover enough of it (its energy counter missed "
+                + "too much of the time, and the battery's charge drop can't be measured)."
+                + (w.isEmpty ? "" : "\nIts \(n): \(fmt(wWh, 2)) Wh (\(awake) awake)")
+        }
+        if w.isEmpty { return "\(fmt(wh, 2)) Wh for the whole sleep, asleep all the time (no wake-ups)" }
+        return "\(fmt(wh, 2)) Wh for the whole sleep:\n\(fmt(wWh, 2)) Wh during its \(n) (\(awake) awake)\n"
+            + "\(fmt(max(0, wh - wWh), 2)) Wh asleep in between"
     }
 
     /// The number of wake-ups as a link: shows this sleep's wake-ups in "Wake-ups by reason".

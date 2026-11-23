@@ -731,27 +731,52 @@ final class PowerLog: @unchecked Sendable {
         // for every period, so a period's estimate is the sum of its parts' estimates.
         // The reference is the last hour the Mac was awake (logged whole-Mac time), going back as far as needed:
         // a clock hour the Mac slept through has almost no energy, and dividing by it would blow the estimate up.
+        // Time the chip log covers (its entries' spans, merged). macOS can stop writing it for hours while the Mac
+        // stays awake (seen on a MacBook Air awake with the lid closed) while the per-app log goes on: time it
+        // doesn't cover is unknown, not 0, and gets the same estimate as the minutes after its last entry.
+        var emCov: [(a: Double, b: Double)] = []
+        for r in em.sorted(by: { $0.a < $1.a }) {
+            if let l = emCov.last, r.a <= l.b + 1 { emCov[emCov.count - 1].b = max(l.b, r.b) } else { emCov.append((r.a, r.b)) }
+        }
+        func uncovered(_ x: Double, _ y: Double) -> [(a: Double, b: Double)] {
+            var out: [(a: Double, b: Double)] = [], cur = x
+            for c in emCov where c.b > x && c.a < y {
+                if c.a > cur { out.append((cur, c.a)) }
+                cur = max(cur, c.b)
+            }
+            if cur < y { out.append((cur, y)) }
+            return out
+        }
+        /// Awake whole-Mac energy outside the sleeps' background wake-ups (that is in the Sleep row).
+        func awakeWh(_ x: Double, _ y: Double) -> Double { max(0, wholeWh(x, y) - sessionAwakeWh(x, y)) }
+        // The time macOS hasn't broken down is split like a fixed reference: the last hour the Mac was awake
+        // (logged whole-Mac time) AND the chip log covers, going back as far as needed. The same reference for
+        // every period, so a period's estimate is the sum of its parts' estimates.
         func refStart(before t: Double) -> Double {
             var awake = 0.0
             for seg in segments.reversed() where seg.a < t {
-                let a = seg.a, b = min(seg.b, t)
-                awake += b - a
-                if awake >= 3600 { return a + (awake - 3600) }
+                for c in emCov.reversed() where c.a < min(seg.b, t) && c.b > seg.a {
+                    let a = max(seg.a, c.a), b = min(seg.b, t, c.b)
+                    guard b > a else { continue }
+                    awake += b - a
+                    if awake >= 3600 { return a + (awake - 3600) }
+                }
             }
             return segments.first?.a ?? t - 86400
         }
         let lastEM = em.map(\.b).max()
         let emRef = lastEM.map { l -> (c: Double, g: Double, d: Double, chip: Double, total: Double) in
             let rs = refStart(before: l), r = emParts(rs, l)
-            return (r.c, r.g, r.d, r.chip, wholeWh(rs, l))
+            return (r.c, r.g, r.d, r.chip, emCov.reduce(0) { $0 + awakeWh(max($1.a, rs), min($1.b, l)) })
         }
-        /// CPU / GPU / memory / chip for [x, y]: logged, plus the estimate for the time after the last entry.
+        /// CPU / GPU / memory / chip for [x, y]: logged, plus the estimate for the awake time the chip log doesn't
+        /// cover (gaps in it, and the time after its last entry).
         func emEst(_ x: Double, _ y: Double) -> (c: Double, g: Double, d: Double, chip: Double) {
-            guard let lastEM else { return (0, 0, 0, 0) }
-            var p = emParts(x, min(y, lastEM))
-            if y > lastEM, let r = emRef, r.total > 0 {
+            guard lastEM != nil else { return (0, 0, 0, 0) }
+            var p = emParts(x, y)
+            if let r = emRef, r.total > 0 {
                 // The chip can't use more than the whole Mac: never split more than the whole-Mac energy itself.
-                let k = wholeWh(max(x, lastEM), y) / max(r.total, r.chip)
+                let k = uncovered(x, y).reduce(0) { $0 + awakeWh($1.a, $1.b) } / max(r.total, r.chip)
                 p = (p.c + r.c * k, p.g + r.g * k, p.d + r.d * k, p.chip + r.chip * k)
             }
             return p
