@@ -401,7 +401,7 @@ enum Explanations {
 
     static let sleep: [InfoSection] = [
         InfoSection(title: "What counts as a sleep", points: [
-            "From the moment the Mac goes to sleep (lid closed, idle, Apple menu) until you wake it. Short wake-ups in the background in between belong to the sleep.",
+            "From the moment the Mac goes to sleep (lid closed, idle, Apple menu) until you wake it. Short wake-ups in the background in between belong to the sleep. Sleeps under a minute without any wake-up aren't listed; a sleep during which the Mac was plugged in counts as on the charger.",
             "Sleep times, wake-ups and their reasons come from macOS's sleep log (pmset), which keeps about a week. Older periods show only what's still there.",
         ]),
         InfoSection(title: "Energy", points: [
@@ -411,7 +411,7 @@ enum Explanations {
         ]),
         InfoSection(title: "Wake-ups", points: [
             "Grouped by macOS's reason: you (lid, keyboard, trackpad), Wi-Fi or Bluetooth (network activity and nearby devices, which macOS reports together), a timer set by macOS (Power Nap, maintenance), the power adapter, other.",
-            "\"Planned\" is the wake macOS had scheduled for that moment and what asked for it.",
+            "\"Planned\" (only for wake-ups by the built-in clock): the wake macOS had scheduled for that moment and what asked for it.",
             "macOS's technical names (processes, wake reasons, settings) are shown in plain words. Hover over a blue name to see the original.",
         ]),
         InfoSection(title: "Didn't sleep", points: [

@@ -247,6 +247,12 @@ enum VerifyTests {
                                 v.cacheDisplay(in: v.bounds, to: rep)
                                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
                             }
+                            // MEM_SHOT_TEXTS=<file>: every text the window shows (as accessibility reads it), one per line,
+                            // and every tooltip ("TIP: …"), for the checks that compare views with each other.
+                            if let f = env["MEM_SHOT_TEXTS"] {
+                                let lines = ShownTexts.collect(v)
+                                try? lines.joined(separator: "\n").write(toFile: f, atomically: true, encoding: .utf8)
+                            }
                             if env["MEM_SHOT_PRESET"] != nil { UserDefaults.standard.set(oldPreset, forKey: "preset") }
                             if env["MEM_SHOT_SLEEP"] != nil { UserDefaults.standard.set(false, forKey: "sleepOnly") }
                             // MEM_SHOT_CHECK=<name>: every probed view (top controls, footer, the whole content) must

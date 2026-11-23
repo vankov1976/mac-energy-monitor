@@ -288,6 +288,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        #if DIAGNOSTICS
+        // Test build: MEM_OPEN_WINDOW=1 opens the window at launch (macOS may restore the app without one).
+        if ProcessInfo.processInfo.environment["MEM_OPEN_WINDOW"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Self.showMainWindow() }
+        }
+        #endif
         // New sleeps can only appear after the Mac wakes: read macOS's sleep log again then (in the background).
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             PMSetLog.shared.markStale()

@@ -111,14 +111,15 @@ enum BT {
         let start = Clock.dayTime(s.start)
         let end = sameDay ? Clock.time(s.end) : Clock.dayTime(s.end)
         var t = start + " – " + end
+        if s.levels == nil { t += "\n" + String(localized: "Charge before and after: not in macOS's battery log") }
         if let l = s.levels {
             t += "\n" + (l.to > l.from + 1
                 ? String(localized: "Charged while asleep: \(pct(l.from)) → \(pct(l.to))")     // plugged in during the sleep
                 : String(localized: "\(pct(max(0, l.from - l.to))) used (\(pct(l.from)) → \(pct(l.to)))"))
         }
-        t += "\n" + String(localized: "\(dur(s.end.timeIntervalSince(s.start))) asleep")
+        t += "\n" + String(localized: "\(ContentView.duration(s.hours)) asleep")      // as in the table
         if let wh = s.wh, let w = s.avgW {
-            t += "\n" + String(localized: "\(wh.formatted(.number.precision(.fractionLength(1)))) Wh used with \(watts(w)) avg. power")
+            t += "\n" + String(localized: "\(SleepTexts.wh(wh)) Wh used with \(watts(w)) avg. power")
         }
         return t
     }

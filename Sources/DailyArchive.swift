@@ -197,6 +197,22 @@ extension PowerLog {
             }
             #endif
             var dh = d.hardware.scaled(k)
+            // A part of a saved day that macOS's sleep log still covers (its power log is gone): the real sleep times
+            // from the sleep log instead of a share by time, and the day's sleep energy shared out by them. "Sleep only"
+            // shows the same estimate for those sleeps (SleepAnalysis.summaryEstimate), so both views agree.
+            if let pmFrom = PMSetLog.shared.fromIfRead(), x >= pmFrom - 60, let spans = PMSetLog.shared.spansIfRead(),
+               let daySleepH = d.hardware.sleepH, let dayAwakeH = d.hardware.awakeH, daySleepH > 0, dayAwakeH > 0 {
+                let part = k * (d.end - d.start)                       // the seconds of this day that count
+                let share = part / (y - x)                             // (less than all of [x, y] if partly counted already)
+                let asleep = spans.reduce(0) { $0 + max(0, min($1.b, y) - max($1.a, x)) } * share
+                let off = (d.hardware.offH ?? 0) * 3600 * k
+                let awake = max(0, part - asleep - off)
+                var r = d.hardware.scaled(awake / 3600 / dayAwakeH)    // awake parts by the time awake
+                r.sleep = d.hardware.sleep.map { $0 * asleep / 3600 / daySleepH }
+                r.sleepH = asleep / 3600; r.awakeH = awake / 3600; r.offH = off / 3600
+                r.unknownH = d.hardware.unknownH.map { $0 * k }; r.unknownWh = d.hardware.unknownWh.map { $0 * k }
+                dh = r
+            }
             if dh.awakeH == nil {          // saved before 1.1.5: not known when the Mac slept
                 dh.awakeH = 0; dh.sleepH = 0
                 dh.unknownH = (d.end - d.start) * k / 3600; dh.unknownWh = dh.whole

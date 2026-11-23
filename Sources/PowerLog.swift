@@ -106,11 +106,19 @@ final class PowerLog: @unchecked Sendable {
         // If the folder was deleted anyway while the app runs, recreate it; the archives are simply unpacked again.
         try? fm.createDirectory(at: cache, withIntermediateDirectories: true)
         let files = (try? fm.contentsOfDirectory(atPath: archives)) ?? []
-        for f in files.sorted() where f.hasSuffix(".PLSQL.gz") {
-            let dest = cache.appendingPathComponent(String(f.dropLast(3))).path
+        // macOS usually compresses a day's archive (.PLSQL.gz), but sometimes leaves it uncompressed (.PLSQL, seen
+        // for 17 and 19 Nov 2026 on one Mac): both count, or those days would be missing.
+        for f in files.sorted() where f.hasSuffix(".PLSQL.gz") || f.hasSuffix(".PLSQL") {
+            let name = f.hasSuffix(".gz") ? String(f.dropLast(3)) : f
+            let dest = cache.appendingPathComponent(name).path
+            if out.contains(dest) { continue }                 // the same day both compressed and not: once
             if !fm.fileExists(atPath: dest) {
-                // One archive that can't be unpacked is left out; the others still count.
-                guard (try? unpack(archives + "/" + f, to: dest)) == true else { continue }
+                // One archive that can't be unpacked or copied is left out; the others still count.
+                if f.hasSuffix(".gz") {
+                    guard (try? unpack(archives + "/" + f, to: dest)) == true else { continue }
+                } else {
+                    guard (try? fm.copyItem(atPath: archives + "/" + f, toPath: dest)) != nil else { continue }   // an APFS clone
+                }
             }
             out.append(dest)
         }
@@ -604,7 +612,31 @@ final class PowerLog: @unchecked Sendable {
                     holes.append(g)
                 }
             }
+            // After macOS's last logged value, the time between the sleeps the sleep log already has: no data, not
+            // awake (macOS writes its power log late; those minutes have no energy yet).
+            if let last = pts.last?.key, sleptTo > last {
+                var cur = last
+                for sp in sessions.filter({ $0.b > last && $0.a < sleptTo }).sorted(by: { $0.a < $1.a }) {
+                    if sp.a > cur { holes.append((cur, sp.a)) }       // awake between sleeps, but nothing logged yet
+                    cur = max(cur, sp.b)
+                }
+            }
             let holeH = holes.reduce(0) { $0 + overlap($1.a, $1.b, lo, hi) } / 3600
+            #if DIAGNOSTICS
+            if ProcessInfo.processInfo.environment["MEM_DEBUG_AWAKE"] != nil {
+                func t(_ x: Double) -> String { Clock.time(Date(timeIntervalSince1970: x)) + String(format: ":%02d", Int(x) % 60) }
+                print("AWAKE lo \(t(lo)) hi \(t(hi)) hiAwake \(t(hiAwake)) lastPt \(pts.last.map { t($0.key) } ?? "-") sleptTo \(sleptTo > 0 ? t(sleptTo) : "-")")
+                print("  segments " + segments.filter { $0.b > lo }.map { "\(t($0.a))–\(t($0.b))" }.joined(separator: " "))
+                print("  sessions " + sessions.filter { $0.b > lo && $0.a < hi }.map { "\(t($0.a))–\(t($0.b))" }.joined(separator: " "))
+                print("  holes " + holes.filter { $0.b > lo }.map { "\(t($0.a))–\(t($0.b))" }.joined(separator: " "))
+                // History's sleeps that aren't one of the sleep log's sleeps (gaps in the power log counted as asleep).
+                let extra = sleeps.filter { g in !sessions.contains { $0.a < g.b && g.a < $0.b } && g.b > lo && g.a < hi }
+                func d(_ x: Double) -> String { Clock.dayTime(Date(timeIntervalSince1970: x)) }
+                print("  gap-sleeps outside the sleep log: " + extra.map { "\(d($0.a))–\(t($0.b)) (\(Int(($0.b - $0.a) / 60)) min)" }.joined(separator: ", "))
+                let partial = sleeps.filter { g in sessions.contains { $0.a < g.b && g.a < $0.b } && !sessions.contains { $0.a <= g.a + 60 && g.b <= $0.b + 60 } && g.b > lo && g.a < hi }
+                print("  gap-sleeps partly outside: " + partial.map { "\(d($0.a))–\(t($0.b))" }.joined(separator: ", "))
+            }
+            #endif
             // Sleeps from pmset's log, each with the same energy rule as "Sleep only" (SleepEnergy.sessionWh),
             // so the Sleep row and "Sleep only" agree. Gaps outside them (before the log, switched off) as before.
             // The battery log around the WHOLE sleeps, also where a sleep runs past the period's end: the energy of a
@@ -683,6 +715,13 @@ final class PowerLog: @unchecked Sendable {
             // usable load records (e.g. around a restart) are not sleep, so they count as awake.
             b.awakeH = max(0, covered.reduce(0) { $0 + ($1.b - $1.a) } / 3600 - b.sleepH! - b.offH! - holeH)
             b.sleep = s.wh != nil || sessKnown ? (s.wh ?? 0) + sessWh : nil
+            #if DIAGNOSTICS
+            if ProcessInfo.processInfo.environment["MEM_SHOW_OUTSIDE"] != nil {
+                print(String(format: "SLEEP PARTS sessions %.2f h %.3f Wh | outside gaps %.2f h %@ Wh | off %.2f h | pmFrom %@",
+                             sessSecs / 3600, sessWh, s.sleepH, s.wh.map { String(format: "%.3f", $0) } ?? "nil", offSecs / 3600,
+                             pmFrom.map { "\(Date(timeIntervalSince1970: $0))" } ?? "nil"))
+            }
+            #endif
             b.sleepEstimated = s.estimated ? true : nil
         }
 

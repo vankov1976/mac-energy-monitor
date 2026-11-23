@@ -54,18 +54,21 @@ struct SleepReport {
         let id = UUID()
         let start: Date, end: Date
         let cause: String            // "Lid closed", "Idle", …
-        let onBattery: Bool?
-        let wh: Double?              // whole-Mac energy, including short wake-ups
+        var onBattery: Bool?         // false also for a sleep that started on battery but charged (plugged in while asleep)
+        var wh: Double?              // whole-Mac energy, including short wake-ups
         let wakes: Int
         var unusual = false          // more than twice this Mac's usual sleep power (same power source)
         var causeTip: String? = nil  // what started it, in more detail (e.g. which app asked to sleep)
         var levels: (from: Double, to: Double)? = nil   // battery charge (%) at the start and end (on battery)
+        var estimated = false        // energy from one counter reading over a longer stretch, shared out by time
+        var fromSummary = false      // energy estimated from the day's saved summary (macOS deleted its power log)
         var hours: Double { end.timeIntervalSince(start) / 3600 }
-        var avgW: Double? { wh.flatMap { hours > 0.01 ? $0 / hours : nil } }
+        /// From 10 seconds on (shorter sleeps: too short to average); nil also when the energy is unknown.
+        var avgW: Double? { wh.flatMap { end.timeIntervalSince(start) >= 10 ? $0 / hours : nil } }
         // Sort keys for the tables (no optionals)
         var whSort: Double { wh ?? -1 }
         var avgSort: Double { avgW ?? -1 }
-        var power: String { onBattery.map { $0 ? "Battery" : "Charger" } ?? "—" }
+        var power: String { onBattery.map { $0 ? "Battery" : "Charger" } ?? "unknown" }
     }
     struct Wake: Identifiable {
         let id = UUID()
@@ -80,6 +83,7 @@ struct SleepReport {
     struct Group: Identifiable {
         let group: WakeGroup
         var count = 0, secs = 0.0, wh = 0.0
+        var unknown = 0              // wake-ups without energy data (not in wh)
         var reasons: [String: Int] = [:]
         var requesters: [String: Int] = [:]
         var id: String { group.rawValue }
@@ -92,7 +96,7 @@ struct SleepReport {
         let blockers: [(name: String, secs: Double, tech: String)]   // tech: macOS's own names, for the tooltip
         let wh: Double?
         var onBattery: Bool? = nil   // from the battery log: charger connected or not (most of the time)
-        var power: String { onBattery.map { $0 ? "Battery" : "Charger" } ?? "—" }
+        var power: String { onBattery.map { $0 ? "Battery" : "Charger" } ?? "unknown" }
         var hours: Double { end.timeIntervalSince(start) / 3600 }
         var whSort: Double { wh ?? -1 }
     }
@@ -103,6 +107,7 @@ struct SleepReport {
         for w in wakes {
             var g = groups[w.group] ?? .init(group: w.group)
             g.count += 1; g.secs += w.secs; g.wh += w.wh ?? 0
+            if w.wh == nil { g.unknown += 1 }
             g.reasons[w.reason, default: 0] += 1
             if let q = w.requester { g.requesters[q, default: 0] += 1 }
             groups[w.group] = g
@@ -150,6 +155,8 @@ struct SleepReport {
         groups = Self.groups(wakes)
     }
     var wakeCount: Int { wakes.filter(\.dark).count }
+    /// Time of the sleeps whose energy is known (the average power divides the known energy by this).
+    var knownH: Double { sessions.filter { $0.wh != nil }.reduce(0) { $0 + $1.hours } }
 }
 
 // MARK: - pmset's sleep/wake log
@@ -546,7 +553,8 @@ enum SleepAnalysis {
                 if open != nil {          // only wake-ups during a recognized sleep (they add up per sleep)
                     wakes.append(.init(time: e.t, dark: dark, group: WakeGroup.of(reason), reason: WakeGroup.label(reason),
                                        requester: req.map { "\($0.process) (\($0.request))" }, secs: secs,
-                                       wh: dark ? counter.wh(e.t, e.t.addingTimeInterval(secs)) : nil))
+                                       wh: dark && counter.fine(e.t.timeIntervalSince1970, e.t.timeIntervalSince1970 + secs)
+                                           ? counter.wh(e.t, e.t.addingTimeInterval(secs)) : nil))
                 }
                 if dark { open?.wakes += 1 }
                 if !dark, let o = open {
@@ -592,6 +600,9 @@ enum SleepAnalysis {
         }
         wakes = merged
 
+        // Sleeps under a minute without any wake-up (macOS logged a sleep it left again at once): not a sleep.
+        all.removeAll { $0.end.timeIntervalSince($0.start) < 60 && $0.wakes == 0 }
+
         let batAll = SleepEnergy.battery((try? log.databases()) ?? [], (all.first?.start.timeIntervalSince1970 ?? 0) - 900,
                                          (all.last?.end.timeIntervalSince1970 ?? 0) + 900)
         func energy(_ s: SleepReport.Session, _ x: Date, _ y: Date, _ bat: [SleepEnergy.Battery]) -> Double? {
@@ -600,10 +611,23 @@ enum SleepAnalysis {
                                   counter: { counter.wh(Date(timeIntervalSince1970: $0), Date(timeIntervalSince1970: $1)) },
                                   counted: counter.counted)
         }
+        // Battery charge before and after each sleep that started on battery: one that charged was plugged in while
+        // asleep, so it counts as a sleep on the charger (power, filter, usual power).
+        let allLevels = BatteryHistory.levels(log, all.filter { $0.onBattery == true }.map { ($0.start, $0.end) })
         for i in all.indices {
             let s = all[i]
-            all[i] = .init(start: s.start, end: s.end, cause: s.cause, onBattery: s.onBattery,
-                           wh: energy(s, s.start, s.end, batAll), wakes: s.wakes)
+            let a = s.start.timeIntervalSince1970, b = s.end.timeIntervalSince1970
+            var n = SleepReport.Session(start: s.start, end: s.end, cause: s.cause, onBattery: s.onBattery,
+                                        wh: energy(s, s.start, s.end, batAll), wakes: s.wakes)
+            if s.onBattery == true {
+                n.levels = allLevels[a]
+                if let l = n.levels, l.to > l.from + 1 { n.onBattery = false }
+            }
+            // Measured from the battery's charge drop: exact. From the counter: estimated when one reading covers a
+            // much longer stretch than this sleep (it includes awake time too), shared out by time.
+            let byBattery = s.onBattery == true && b - a >= 1800 && SleepEnergy.measured((a, b), batAll) != nil
+            n.estimated = n.wh != nil && !byBattery && counter.coarse(a, b)
+            all[i] = n
         }
         // Usual sleep power per power source (median of sleeps of at least 30 minutes in the whole log).
         func median(_ v: [Double]) -> Double? {
@@ -627,9 +651,22 @@ enum SleepAnalysis {
             let inside = wakes.filter { $0.dark && $0.time >= a && $0.time < b }.count
             let wh = energy(s, a, b, bat)
             r.sessions.append(.init(start: a, end: b, cause: s.cause, onBattery: s.onBattery,
-                                    wh: wh, wakes: inside, unusual: s.unusual, causeTip: causeTips[s.start]))
+                                    wh: wh, wakes: inside, unusual: s.unusual, causeTip: causeTips[s.start],
+                                    levels: s.levels, estimated: s.estimated))
         }
         r.wakes = wakes.filter { $0.time >= from && $0.time < to && $0.dark }
+        // A sleep without its own measurement on a day whose power log macOS has deleted: the app's saved summary of
+        // that day still has its total sleep energy and time asleep. Shared out by the time asleep, exactly as History
+        // does for that day (fullReport), so both views show the same.
+        for i in r.sessions.indices where r.sessions[i].wh == nil {
+            let a = r.sessions[i].start.timeIntervalSince1970, b = r.sessions[i].end.timeIntervalSince1970
+            var est = 0.0, used = false
+            for d in log.archive.days where d.end > a && d.start < b && counter.counted(d.start, d.end) == 0 {
+                guard let sh = d.hardware.sleepH, sh > 0, let sw = d.hardware.sleep else { continue }
+                est += sw * (min(b, d.end) - max(a, d.start)) / 3600 / sh; used = true
+            }
+            if used { r.sessions[i].wh = est; r.sessions[i].fromSummary = true }
+        }
         // Sums, and 2. wake-ups by reason.
         r.finish()
         r.allSessions = r.sessions.count
@@ -639,7 +676,10 @@ enum SleepAnalysis {
         //    Its power source (for the Power filter): what the battery log says for most of that time.
         r.noSleep = noSleep(log, events: events, counter: counter, from: from, to: to,
                             asleep: all.map { ($0.start, $0.end) }).map { n in
-            var n = n
+            // The energy exactly as History counts this awake time (its whole-Mac values), so both views agree.
+            var n = (try? log.report(from: n.start, to: n.end)).map { h in
+                SleepReport.NoSleep(start: n.start, end: n.end, cause: n.cause, blockers: n.blockers, wh: h.hardware.whole)
+            } ?? n
             let a = n.start.timeIntervalSince1970, b = n.end.timeIntervalSince1970
             let inside = bat.filter { $0.t >= a && $0.t <= b }
             if inside.isEmpty { n.onBattery = bat.last { $0.t < a }?.onBattery }
@@ -751,7 +791,15 @@ enum SleepAnalysis {
             guard cut.timeIntervalSince(n.start) > (minSecs[n.cause] ?? 600) else { return nil }
             return .init(start: n.start, end: cut, cause: n.cause, blockers: blockers(n.start, cut), wh: counter.wh(n.start, cut))
         }
-        return out.sorted { $0.start < $1.start }
+        // Back to back with the same cause (e.g. the display went off again right after a short moment on): one stretch.
+        var joined: [SleepReport.NoSleep] = []
+        for n in out.sorted(by: { $0.start < $1.start }) {
+            if let l = joined.last, l.cause == n.cause, n.start.timeIntervalSince(l.end) < 60 {
+                joined[joined.count - 1] = .init(start: l.start, end: n.end, cause: l.cause, blockers: blockers(l.start, n.end),
+                                                 wh: counter.wh(l.start, n.end))
+            } else { joined.append(n) }
+        }
+        return joined
     }
 
     /// Hints in plain words. A name with a technical background is written «plain name|technical detail»: the view
@@ -777,7 +825,7 @@ enum SleepAnalysis {
             let b = sleptOnBattery && settings.battery[key] == "1", c = sleptOnCharger && settings.charger[key] == "1"
             return b && c ? "both on battery and with the charger" : b ? "on battery" : c ? "with the charger" : nil
         }
-        func dur(_ secs: Double) -> String { secs >= 3600 ? String(format: "%.1f h", locale: .current, secs / 3600) : "\(Int(secs / 60)) min" }
+        func dur(_ secs: Double) -> String { ContentView.duration(secs / 3600) }     // as in the tables
         // On the charger, sleep can cost far more than on battery: say so with this Mac's numbers and settings.
         if let b = r.avgBatteryW, let c = r.avgChargerW, c > 3 * b {
             let diff = ["powernap": "Power Nap", "womp": "Wake for network access", "SleepServices": "Sleep services"]
@@ -799,7 +847,7 @@ enum SleepAnalysis {
             let w = why.isEmpty ? "" : " " + why.joined(separator: "; ").prefix(1).uppercased() + why.joined(separator: "; ").dropFirst() + "."
             let wifi = Explain.reason("wifibt")
             let tip = TipFormat.make(wifi.0, bullets: wifi.1, tech: ["macOS wake reason: wifibt"])
-            let text = "Most wake-ups (\(Int(share(.network) * 100))%) come from «Wi-Fi or Bluetooth|\(tip)». \(g.count) wake-ups, awake \(dur(g.secs)) in total, \(String(format: "%.1f", locale: .current, g.wh)) Wh.\(w)"
+            let text = "Most wake-ups (\(Int(share(.network) * 100))%) come from «Wi-Fi or Bluetooth|\(tip)». \(g.count) wake-ups, awake \(dur(g.secs)) in total.\(w)"
             h.append(text)
         }
         if r.wakes.count >= 10, share(.scheduled) >= 0.1, let g = r.groups.first(where: { $0.group == .scheduled }), matters(g) {
@@ -807,23 +855,34 @@ enum SleepAnalysis {
             let timerTip = TipFormat.make("macOS set the Mac's built-in clock to wake it for planned background work:",
                                           bullets: ["Power Nap checks", "backups (e.g. Time Machine), updates and sync", "Sleep Services: iCloud, Find My, mail"],
                                           tech: ["macOS wake reasons: rtc Maintenance, rtc SleepService (rtc = the built-in clock)"])
-            let text = "\(g.count) wake-ups were on a «timer set by macOS|\(timerTip)», awake \(dur(g.secs)) in total, \(String(format: "%.1f", locale: .current, g.wh)) Wh.\(p)"
+            let text = "\(g.count) wake-ups were on a «timer set by macOS|\(timerTip)», awake \(dur(g.secs)) in total.\(p)"
             h.append(text)
         }
         let unusual = r.sessions.filter(\.unusual)
         if !unusual.isEmpty {
             h.append("\(unusual.count) sleep\(unusual.count == 1 ? "" : "s") used more than twice this Mac's usual sleep power (marked with a blue «⚠|» below). Look at the wake-ups and \"Didn't sleep\" for that time.")
         }
-        for n in r.noSleep.sorted(by: { ($0.wh ?? 0) > ($1.wh ?? 0) }).prefix(3) {
-            let span = Clock.dayTime(n.start) + "–" + Clock.time(n.end)
-            let when = span + ", with the " + (n.cause == "Lid closed" ? "lid closed" : "display off")
-            let dur = n.hours >= 1 ? String(format: "%.1f h", locale: .current, n.hours) : "\(Int(n.hours * 60)) min"
-            let who = n.blockers.first.map { b in
-                let t = SleepAnalysis.blockerTip(b.name, b.tech)
-                let tip = t.isEmpty ? "" : "|" + t
-                return b.name == "macOS power management" ? " «macOS itself\(tip)» kept it awake (e.g. Power Nap or wake-ups on the charger)."
-                    : " Kept awake mostly by: «\(b.name)\(tip)»." } ?? ""
-            h.append("\(when), the Mac stayed awake for \(dur)\(n.wh.map { String(format: " (%.1f Wh)", locale: .current, $0) } ?? "").\(who)")
+        // "Didn't sleep": one hint that says what it is and what it cost, first (it's the one to act on).
+        if !r.noSleep.isEmpty {
+            let n = r.noSleep.count, secs = r.noSleep.reduce(0) { $0 + $1.end.timeIntervalSince($1.start) }
+            let wh = r.noSleep.compactMap(\.wh).reduce(0, +)
+            let times = n == 1 ? "once" : "\(n) times"
+            var cost = " \(ContentView.duration(secs / 3600)) awake, \(fmt(wh, 2)) Wh"
+            if let s = r.sleepWh, s > 0 {
+                cost += wh > s ? ", more than all its sleeps used (\(fmt(s, 2)) Wh)"
+                    : ", \(Int((100 * wh / s).rounded())) % of what all its sleeps used (\(fmt(s, 2)) Wh)"
+            }
+            // Who kept it awake longest over all these times (an app or service before macOS's own power management).
+            var total: [String: (secs: Double, tech: String)] = [:]
+            for x in r.noSleep { for b in x.blockers { total[b.name, default: (0, b.tech)].secs += b.secs } }
+            let top = total.filter { $0.key != "macOS power management" }.max { $0.value.secs < $1.value.secs }
+                ?? total.max { $0.value.secs < $1.value.secs }
+            let who = top.map { b in
+                let t = SleepAnalysis.blockerTip(b.key, b.value.tech), tip = t.isEmpty ? "" : "|" + t
+                return b.key == "macOS power management" ? " «macOS itself\(tip)» kept it awake (e.g. Power Nap or wake-ups on the charger)."
+                    : " Kept awake mostly by: «\(b.key)\(tip)»." } ?? ""
+            h.insert("The Mac stayed awake \(times) when it should have slept (lid closed or display off):\(cost). "
+                     + "This energy counts as awake in the energy views, not as sleep.\(who) «See Didn't sleep|→nosleep»", at: 0)
         }
         return h
     }
@@ -875,6 +934,22 @@ enum SleepAnalysis {
             guard lo < spans.count, t > spans[lo].a else { return (wh0, s0) }
             let o = t - spans[lo].a
             return (wh0 + spans[lo].w * o / 3600, s0 + o)
+        }
+
+        /// One counter reading covers much more than [x, y] (at least half of it, and 1.5× as long and 30 min+):
+        /// the energy for [x, y] is then that reading's average shared out by time, an estimate.
+        func coarse(_ x: Double, _ y: Double) -> Bool {
+            let len = y - x
+            guard len > 0 else { return false }
+            return spans.contains { s in s.b - s.a > max(1.5 * len, 1800) && min(s.b, y) - max(s.a, x) >= 0.5 * len }
+        }
+
+        /// The counter has readings close around [x, y] (none of the readings covering it is more than 3× as long, or
+        /// 2 minutes): a short wake-up's energy is then measured. With readings minutes apart (seen on a MacBook Air) a
+        /// reading mixes the seconds awake with minutes asleep, and the wake-up's share would come out far too low.
+        func fine(_ x: Double, _ y: Double) -> Bool {
+            let ov = spans.filter { $0.b > x && $0.a < y }
+            return !ov.isEmpty && ov.allSatisfy { $0.b - $0.a <= max(3 * (y - x), 120) }
         }
 
         /// Wh between two times without the coverage rule (time the counter doesn't cover counts as 0).

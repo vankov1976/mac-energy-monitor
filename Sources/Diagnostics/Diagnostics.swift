@@ -34,6 +34,7 @@ extension EnergyMonitorApp {
             exit(0)
         }
         GapTests.runIfAsked()
+        SleepAudit.runIfAsked()
         VerifyTests.runIfAsked()
         liveTestIfAsked()
         diagnosticsIfAsked()

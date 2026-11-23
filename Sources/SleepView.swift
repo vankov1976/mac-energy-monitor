@@ -51,12 +51,7 @@ final class SleepModel: ObservableObject {
         running = (from, to); waiting = nil
         let log = sharedLog
         logQueue.async {
-            var r = SleepAnalysis.report(log, from: from, to: to)
-            // Battery charge at the start and end of each sleep on battery (for the Power column's tooltip).
-            let lv = BatteryHistory.levels(log, r.sessions.filter { $0.onBattery == true }.map { ($0.start, $0.end) })
-            for i in r.sessions.indices where r.sessions[i].onBattery == true {
-                r.sessions[i].levels = lv[r.sessions[i].start.timeIntervalSince1970]
-            }
+            let r = SleepAnalysis.report(log, from: from, to: to)
             DispatchQueue.main.async {
                 guard gen == self.generation else { return }    // another period was chosen meanwhile
                 self.running = nil
@@ -152,6 +147,17 @@ struct SleepSectionsView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 .id(focus == nil)   // a new control when a tab is hidden or shown: macOS doesn't resize the segments again
+                // "Didn't sleep" highlighted next to the tabs (a segment can't be coloured): orange, click = show it.
+                if tab != .noSleep, focus == nil, !report.noSleep.isEmpty {
+                    let n = report.noSleep.count
+                    Button { tab = .noSleep } label: {
+                        Label("\(n)× awake when it should have slept", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    .buttonStyle(.plain)
+                    .onContinuousHover { if case .active = $0 { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() } }
+                    .tip(Self.noSleepExplanation + "\n\nClick to see them.")
+                }
                 if tab == .wakes, let f = focus {   // which sleep "Wake-ups by reason" shows
                     Text("Sleep \(Clock.dateTime(f.start)) – \(Clock.dateTime(f.end))")
                         .foregroundStyle(.secondary).lineLimit(1)
@@ -178,7 +184,7 @@ struct SleepSectionsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(report.hints.enumerated()), id: \.offset) { i, h in
-                    Label { TipText(markup: h) } icon: { Image(systemName: "lightbulb") }
+                    Label { TipText(markup: h) { if $0 == "nosleep" { focus = nil; tab = .noSleep } } } icon: { Image(systemName: "lightbulb") }
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
                         .labelStyle(TintedIcon(color: .yellow))
                         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("hints")).maxY } action: { hintBottoms[i] = $0 }
@@ -237,34 +243,33 @@ struct SleepSectionsView: View {
             Table(sessions, sortOrder: $sessionSort) {
                 TableColumn("Power", value: \.power) { s in
                     // Blue like every other value with a tooltip.
-                    tinted(s, Text(s.power).foregroundColor(s.onBattery == true ? Color.tip : nil))
+                    let c = SleepTexts.power(s)
+                    tinted(s, Text(c.text).foregroundColor(c.tip != nil ? Color.tip : nil))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .tip(s.onBattery == true ? BT.sleepTip(s) : "")
+                        .tip(c.tip ?? "")
                 }
                     .width(min: 80, ideal: 80)        // "Charger" and the header with its sort arrow; the table scrolls sideways if needed
                 TableColumn("Sleep started by", value: \.cause) { s in
-                    if let t = s.causeTip { Text(s.cause).foregroundStyle(Color.tip).tip(t) } else { Text(s.cause) }
+                    let c = SleepTexts.cause(s)
+                    if let t = c.tip { Text(c.text).foregroundStyle(Color.tip).tip(t) } else { Text(c.text) }
                 }
                     .width(Self.causeWidth)
                 TableColumn("Wake-ups", value: \.wakes) { s in wakesLink(s).frame(maxWidth: .infinity, alignment: .trailing) }
                     .width(84)
                 TableColumn("Energy", value: \.whSort) { s in
-                    Text(s.wh.map { fmt($0, 2) + " Wh" } ?? "unknown").foregroundStyle(Color.tip)
-                        .tip(energyTip(s)).frame(maxWidth: .infinity, alignment: .trailing)
+                    let c = SleepTexts.energy(s, report.wakes)
+                    Text(c.text).foregroundStyle(Color.tip).tip(c.tip ?? "").frame(maxWidth: .infinity, alignment: .trailing)
                 }.width(85)
                 TableColumn("Avg. power", value: \.avgSort) { s in
+                    let a = SleepTexts.avg(s, report.wakes)
                     HStack(spacing: 3) {
-                        if s.unusual {
-                            Image(systemName: "exclamationmark.triangle").foregroundStyle(Color.tip)
-                                .tip("More than twice this Mac's usual sleep power on \(s.onBattery == true ? "battery" : "the charger")")
-                        }
-                        if s.avgW == nil { Text("unknown").foregroundStyle(Color.tip).tip(energyTip(s)) }
-                        else { tinted(s, Text(s.avgW.map { fmt($0, 2) + " W" } ?? "")) }
+                        if let u = a.unusual { Image(systemName: "exclamationmark.triangle").foregroundStyle(Color.tip).tip(u) }
+                        if let t = a.cell.tip { Text(a.cell.text).foregroundStyle(Color.tip).tip(t) } else { tinted(s, Text(a.cell.text)) }
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }.width(95)
                 TableColumn("Duration", value: \.hours) { s in
-                    tinted(s, Text(ContentView.duration(s.hours))).frame(maxWidth: .infinity, alignment: .trailing)
+                    tinted(s, Text(SleepTexts.duration(s))).frame(maxWidth: .infinity, alignment: .trailing)
                 }.width(95)
                 TableColumn("From", value: \.start) { s in tinted(s, Text(Clock.dateTime(s.start))) }
                     .width(Self.dateWidth)
@@ -273,22 +278,6 @@ struct SleepSectionsView: View {
             }
             .monospacedDigit()
         }
-    }
-
-    /// Tooltip of a sleep's energy: the whole sleep = its wake-ups (the seconds it was awake) + the time asleep in
-    /// between. That's why the wake-ups' energy (shown when you click the number) is less than the sleep's.
-    private func energyTip(_ s: SleepReport.Session) -> String {
-        let w = report.wakes.filter { $0.time >= s.start && $0.time < s.end }
-        let wWh = w.compactMap(\.wh).reduce(0, +), awake = ContentView.duration(w.reduce(0) { $0 + $1.secs } / 3600)
-        let n = w.count == 1 ? "1 wake-up" : "\(w.count) wake-ups"
-        guard let wh = s.wh else {
-            return "Energy of the whole sleep unknown: macOS's logs don't cover enough of it (its energy counter missed "
-                + "too much of the time, and the battery's charge drop can't be measured)."
-                + (w.isEmpty ? "" : "\nIts \(n): \(fmt(wWh, 2)) Wh (\(awake) awake)")
-        }
-        if w.isEmpty { return "\(fmt(wh, 2)) Wh for the whole sleep, asleep all the time (no wake-ups)" }
-        return "\(fmt(wh, 2)) Wh for the whole sleep:\n\(fmt(wWh, 2)) Wh during its \(n) (\(awake) awake)\n"
-            + "\(fmt(max(0, wh - wWh), 2)) Wh asleep in between"
     }
 
     /// The number of wake-ups as a link: shows this sleep's wake-ups in "Wake-ups by reason".
@@ -314,6 +303,11 @@ struct SleepSectionsView: View {
     }
     private var focusedGroups: [SleepReport.Group] { focus == nil ? report.groups : SleepReport.groups(focusedWakes) }
 
+    /// A value; blue with its tooltip when it has one.
+    @ViewBuilder private func cell(_ c: SleepTexts.Cell) -> some View {
+        if let t = c.tip { Text(c.text).foregroundStyle(Color.tip).tip(t) } else { Text(c.text) }
+    }
+
     /// Normal text in every row; a sleep with unusually high power is marked only by the orange ⚠ next to its power.
     private func tinted(_ s: SleepReport.Session, _ t: Text) -> some View { t }
 
@@ -330,15 +324,8 @@ struct SleepSectionsView: View {
                     .width(84)
                 TableColumn("Awake", value: \.secs) { g in Text(ContentView.duration(g.secs / 3600)).frame(maxWidth: .infinity, alignment: .trailing) }
                     .width(85)
-                TableColumn("Energy", value: \.wh) { g in Text(fmt(g.wh, 2) + " Wh").frame(maxWidth: .infinity, alignment: .trailing) }
-                    .width(85)
                 TableColumn("Details") { g in
-                    bullets(lines: groupLines, g.reasons.sorted { $0.value > $1.value }.prefix(3).map {
-                                Bullet(name: FriendlyNames.reason($0.key), after: " (\($0.value)×)",
-                                       tip: Self.reasonTip($0.key)) }
-                            + g.requesters.sorted { $0.value > $1.value }.prefix(3).map {
-                                Bullet(before: "Planned: ", name: FriendlyNames.requester($0.key), after: " (\($0.value)×)",
-                                       tip: Self.requestTip($0.key)) })
+                    bullets(lines: groupLines, SleepTexts.groupBullets(g).map { Bullet(before: $0.before, name: $0.text, after: $0.after, tip: $0.tip) })
                 }
                 .width(440)
             }
@@ -349,25 +336,35 @@ struct SleepSectionsView: View {
 
     // MARK: didn't sleep
 
-    @ViewBuilder private var noSleepTable: some View {
+    static let noSleepExplanation = "Times the Mac should have slept but stayed awake: the lid was closed for more than 10 minutes, "
+        + "or the display was off for more than 30 minutes. \"Kept awake by\" shows who prevented the sleep. "
+        + "Their energy counts as awake in the energy views (1 hour … All without \"Sleep only\"), not as sleep."
+
+    private var noSleepTable: some View {
+        VStack(alignment: .leading, spacing: 8) { noSleepTableContent }    // explanation above the table, one block
+    }
+    @ViewBuilder private var noSleepTableContent: some View {
+        if !report.noSleep.isEmpty {
+            Label(Self.noSleepExplanation, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(.secondary).labelStyle(TintedIcon(color: .orange))
+                .fixedSize(horizontal: false, vertical: true)
+        }
         if report.noSleep.isEmpty {
             empty("No times found where the Mac stayed awake with the lid closed (more than 10 minutes) or with the display off (more than 30 minutes).")
         } else {
             Table(report.noSleep.sorted(using: noSleepSort), sortOrder: $noSleepSort) {
-                TableColumn("Power", value: \.power) { n in Text(n.power) }
+                TableColumn("Power", value: \.power) { n in cell(SleepTexts.noSleepCells(n)[0]) }
                     .width(min: 80, ideal: 80)
                 TableColumn("While", value: \.cause) { n in Text(n.cause) }
                     .width(min: Self.whileWidth, ideal: Self.whileWidth)
-                TableColumn("Energy", value: \.whSort) { n in Text(n.wh.map { fmt($0, 2) + " Wh" } ?? "—").frame(maxWidth: .infinity, alignment: .trailing) }
+                TableColumn("Energy", value: \.whSort) { n in cell(SleepTexts.noSleepCells(n)[2]).frame(maxWidth: .infinity, alignment: .trailing) }
                     .width(85)
                 TableColumn("Duration", value: \.hours) { n in Text(ContentView.duration(n.hours)).frame(maxWidth: .infinity, alignment: .trailing) }
                     .width(90)
                 TableColumn("From", value: \.start) { n in Text(Clock.dateTime(n.start)) }.width(Self.dateWidth)
                 TableColumn("To", value: \.end) { n in Text(Clock.dateTime(n.end)) }.width(Self.dateWidth)
                 TableColumn("Kept awake by") { n in
-                    bullets(lines: noSleepLines, n.blockers.isEmpty ? [Bullet(name: "Not logged")] : n.blockers.map {
-                        Bullet(name: $0.name, after: " · \(ContentView.duration($0.secs / 3600))",
-                               tip: Self.blockerTip($0.name, $0.tech)) })
+                    bullets(lines: noSleepLines, SleepTexts.blockerBullets(n).map { Bullet(before: $0.before, name: $0.text, after: $0.after, tip: $0.tip) })
                 }
                 .width(360)
             }
@@ -392,7 +389,7 @@ struct SleepSectionsView: View {
     }
 
     /// Bullet lines in the tallest row; every row gets that height, so all rows are the same.
-    private var groupLines: Int { focusedGroups.map { min($0.reasons.count, 3) + min($0.requesters.count, 3) }.max() ?? 1 }
+    private var groupLines: Int { focusedGroups.map { $0.reasons.count + $0.requesters.count }.max() ?? 1 }
     private var noSleepLines: Int { report.noSleep.map { max($0.blockers.count, 1) }.max() ?? 1 }
 
     /// One bullet per entry, one line each; the tooltip has the full text and macOS's technical name.

@@ -327,9 +327,10 @@ struct ContentView: View {
             // No sleep in the period: 0 Wh and a plain reason instead of "N/A".
             let none = s.sessions.isEmpty
             let noneText = s.allSessions > 0 ? "No sleep matches the filters" : "No sleep in this period"
-            card("Energy while asleep", none ? "0 Wh" : s.sleepWh.map { "\(fmt($0, 1)) Wh" } ?? "N/A", "moon.zzz",
+            card("Energy while asleep", none ? "0 Wh" : s.sleepWh.map { "\(fmt($0, 2)) Wh" } ?? "unknown", "moon.zzz",
                  note: none ? noneText : s.sleepH > 0 ? "Asleep \(duration(s.sleepH))" : nil)
-            card("Avg. power while asleep", s.sleepWh.flatMap { s.sleepH > 0.01 ? "\(fmt($0 / s.sleepH, 2)) W" : nil } ?? "N/A", "gauge.medium",
+            // The known energy over the time of the sleeps with known energy (sleeps with unknown energy left out of both).
+            card("Avg. power while asleep", s.sleepWh.flatMap { s.knownH > 0.01 ? "\(fmt($0 / s.knownH, 2)) W" : nil } ?? "unknown", "gauge.medium",
                  note: none ? noneText
                     : [s.avgBatteryW.map { "Battery \(fmt($0, 2)) W" }, s.avgChargerW.map { "Charger \(fmt($0, 2)) W" }]
                         .compactMap { $0 }.joined(separator: " · "))

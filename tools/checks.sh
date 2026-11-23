@@ -24,5 +24,7 @@ run sleep "$B" --sleepcheck 7
 run battery "$B" --batterycheck
 run charges "$B" --chargecheck
 run sleepcompare "$B" --sleepcompare
+echo "== sleep audit (every value and tooltip of the Sleep only tables)"; timeout 900 "$B" --sleepaudit 2>&1 | awk '/^ISSUE \[i-/ {next} /^ISSUE/ {print "FAIL: " substr($0, 7); n++} END {print n ? n " AUDIT ISSUE(S)" : "SLEEP AUDIT PASSED"}'
+echo "== app audit (what the app really shows, compared between views)"; T=$(mktemp -d); tools/appaudit.sh "$B" "$T" 2>&1 | grep -E "^FAIL|PASSED|PROBLEM"; rm -rf "$T"
 echo "== layout (smallest window)"; tools/layoutcheck.sh "$B" 2>&1 | grep -v "^screenshots"
 echo "== gap"; tools/gaptest.sh 2>&1 | tail -3
