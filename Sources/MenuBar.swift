@@ -330,17 +330,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
         }))
         // Fixed width: digits all have the same width and the text always has the same number of characters.
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        let sample = " " + Self.label(88.8)
-        let textW = (sample as NSString).size(withAttributes: [.font: font]).width
         // The battery after the watts (Macs with a battery): icon with % and the time left / until full, fixed width.
         let bat = BatteryModel.shared
         // The battery after the watts (Macs with a battery), in the same menu bar item: icon with % and the time
-        // left / until full, fixed width. The icon image is made only when the % or charging changes.
-        // Room for the widest text it can show: a time ("12:34"), the calculating dots, "Full" or "Paused".
-        let batTextW = ([Self.batteryTime(nil), Self.batteryTime(36000), BT.menuFull, BT.menuPaused] as [NSString])
-            .map { ("  " + ($0 as String) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        let batW = Self.batteryIconSize.width + batTextW + 2
-        let baseLength = ceil(textW + (item.button?.image?.size.width ?? 16) + 12)
+        // left / until full. The item is exactly as wide as what it shows: a time and the calculating dots always
+        // have the same width ("12:34"), so it only changes when the state does (plugged in or out, Full, Paused).
+        // The icon image is made only when the % or charging changes.
         toggledObserver = NotificationCenter.default.addObserver(forName: Self.batteryToggled, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -355,22 +350,20 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
             guard let self else { return }
             // The battery can be switched off in the panel ("In menu bar").
             let wantBattery = bat.hasBattery && (UserDefaults.standard.object(forKey: Self.batteryKey) as? Bool ?? true)
-            let length = wantBattery ? ceil(baseLength + batW) : baseLength
-            // macOS doesn't lay the item out again while the panel is open (and a wider item would move the panel),
-            // so "In menu bar" closes the panel first (batteryToggled) and the width changes right after.
-            if self.item.length != length && !self.popover.isShown { self.item.length = length }
-            // The battery is drawn only when the item really has room for it (never over the watts).
-            let showBattery = wantBattery && self.item.length >= ceil(baseLength + batW)
+            // The battery's text now: on the charger but not charging, "Full" or "Paused" (no time, no dots).
+            var time = ""
+            if wantBattery, let b = bat.now {
+                bat.menuBarTick()                                       // same rhythm as the watts
+                time = b.onCharger && !b.charging ? (b.fullyCharged || b.level >= 100 ? BT.menuFull : BT.menuPaused)
+                    : Self.batteryTime(b.onCharger ? bat.secondsToFull : bat.secondsLeft, animate: true)
+            }
+            let showBattery = wantBattery
             let text = " " + (w.map(Self.label) ?? "–– W")
             let out = NSMutableAttributedString(string: text, attributes: [.font: font])
             var key = text
             if showBattery, let b = bat.now {
-                bat.menuBarTick()                                       // same rhythm as the watts
                 let level = b.level.rounded(), charging = b.onCharger && !b.fullyCharged || b.charging
                 let full = b.onCharger && !b.charging && (b.fullyCharged || b.level >= 100)     // only a bolt inside
-                // On the charger but not charging: fully charged or charging paused, no time to show (no dots either).
-                let time = b.onCharger && !b.charging ? (b.fullyCharged || b.level >= 100 ? BT.menuFull : BT.menuPaused)
-                    : Self.batteryTime(b.onCharger ? bat.secondsToFull : bat.secondsLeft, animate: true)
                 key += "|\(level)|\(charging)|\(full)|" + time
                 if self.batteryImageKey != "\(level)|\(charging)|\(full)" {
                     self.batteryImageKey = "\(level)|\(charging)|\(full)"
@@ -380,18 +373,21 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSPopoverDeleg
                 out.append(NSAttributedString(string: "  ", attributes: [.font: font]))
                 out.append(NSAttributedString(attachment: self.batteryAttachment))
                 out.append(NSAttributedString(string: " " + time, attributes: [.font: font]))
-                // macOS centres the item's content: a shorter text ("Full", "0:05") would leave its spare room half on
-                // the left. An empty gap after the text keeps it as wide as the widest, so everything stays left.
-                let pad = batTextW - ("  " + time as NSString).size(withAttributes: [.font: font]).width
-                if pad > 0.5 {
-                    let gap = NSTextAttachment(); gap.image = NSImage(size: NSSize(width: pad, height: 1))
-                    gap.bounds = CGRect(x: 0, y: 0, width: pad, height: 1)
-                    out.append(NSAttributedString(attachment: gap))
-                }
             }
             guard key != self.lastTitle else { return }                // redraw the menu bar only when it changes
             self.lastTitle = key
-            self.item.button?.attributedTitle = out
+            guard let button = self.item.button else { return }
+            button.attributedTitle = out
+            // Exactly as wide as the content (the button knows its own margins): no empty space left or right.
+            // macOS doesn't lay the item out again while the panel is open (and a wider item would move the panel):
+            // then a battery that doesn't fit waits until the panel closes ("In menu bar" closes it first).
+            let need = ceil(button.intrinsicContentSize.width)
+            if !self.popover.isShown {
+                if self.item.length != need { self.item.length = need }
+            } else if need > self.item.length + 0.5 {
+                button.attributedTitle = NSAttributedString(string: text, attributes: [.font: font])
+                self.lastTitle = ""
+            }
             // VoiceOver can't read the battery picture: a spoken label for the whole item.
             var spoken = "Mac Energy Monitor, " + text.trimmingCharacters(in: .whitespaces)
             if showBattery, let b = bat.now {

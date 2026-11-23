@@ -97,13 +97,15 @@ struct BatteryNow {
             .withPowerController().faked()
     }
 
-    /// Test build: MEM_FAKE_BATTERY=full|paused shows that state (for screenshots); otherwise unchanged.
+    /// Test build: MEM_FAKE_BATTERY=full|paused|battery|charging shows that state (for screenshots); otherwise unchanged.
     private func faked() -> BatteryNow {
         #if DIAGNOSTICS
         var b = self
         switch ProcessInfo.processInfo.environment["MEM_FAKE_BATTERY"] {
         case "full": b.level = 100; b.onCharger = true; b.charging = false; b.fullyCharged = true
         case "paused": b.level = 80; b.onCharger = true; b.charging = false; b.fullyCharged = false
+        case "battery": b.level = 63; b.onCharger = false; b.charging = false; b.fullyCharged = false
+        case "charging": b.level = 63; b.onCharger = true; b.charging = true; b.fullyCharged = false
         default: break
         }
         return b
